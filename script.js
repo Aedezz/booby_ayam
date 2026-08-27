@@ -1,18 +1,26 @@
-// State untuk menyimpan quantity
-let state = {};
+// ==============================
+// STATE
+// state.items  -> { itemId: qty }
+// state.log    -> [{ id, name, change, qtyAfter, time }]  (riwayat hari berjalan)
+// ==============================
+let state = { items: {}, log: [] };
 try {
-    state = JSON.parse(localStorage.getItem('bobby_state')) || {};
+    const saved = JSON.parse(localStorage.getItem('bobby_state'));
+    if (saved) {
+        state.items = saved.items || saved || {}; // saved format lama (langsung {id: qty}) tetap kebaca
+        state.log = saved.log || [];
+    }
 } catch (e) {
     console.error("Gagal membaca localStorage, mereset state:", e);
-    state = {};
+    state = { items: {}, log: [] };
 }
 
-// Render UI
+// Render UI Menu
 function renderMenu() {
     const container = document.getElementById('menuContainer');
     if (!container) return; // Safety check
     container.innerHTML = '';
-    
+
     let currentCategory = '';
 
     menuData.forEach(item => {
@@ -25,7 +33,7 @@ function renderMenu() {
             currentCategory = item.category;
         }
 
-        const qty = state[item.id] || 0;
+        const qty = state.items[item.id] || 0;
 
         // Render Item Baris
         const div = document.createElement('div');
@@ -49,29 +57,45 @@ function renderMenu() {
 
 // Fungsi Update Quantity
 function updateQty(id, change) {
-    let currentQty = state[id] || 0;
+    let currentQty = state.items[id] || 0;
     let newQty = currentQty + change;
-    
+
     if (newQty < 0) newQty = 0;
-    state[id] = newQty;
-    
+    if (newQty === currentQty) return; // gak ada perubahan nyata (misal minus dari 0)
+
+    state.items[id] = newQty;
+
+    // Catat riwayat transaksi SAAT ITU JUGA
+    const item = menuData.find(m => m.id === id);
+    if (item) {
+        state.log.push({
+            id: id,
+            name: item.name,
+            change: change,
+            qtyAfter: newQty,
+            time: new Date().toISOString()
+        });
+    }
+
     document.getElementById(`qty-${id}`).innerText = newQty;
     saveState();
     calculateTotal();
+    renderRiwayatHariIni();
 }
 
 // Hitung Total Omset
 function calculateTotal() {
     let total = 0;
     menuData.forEach(item => {
-        const qty = state[item.id] || 0;
+        const qty = state.items[item.id] || 0;
         total += qty * item.price;
     });
-    
+
     const totalEl = document.getElementById('totalOmset');
     if (totalEl) {
         totalEl.innerText = 'Rp ' + total.toLocaleString('id-ID');
     }
+    return total;
 }
 
 // Simpan ke Local Storage
@@ -79,12 +103,191 @@ function saveState() {
     localStorage.setItem('bobby_state', JSON.stringify(state));
 }
 
-// Reset Data Harian
+// ==============================
+// RIWAYAT HARI INI (real-time)
+// ==============================
+function formatJam(isoString) {
+    const d = new Date(isoString);
+    return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderRiwayatHariIni() {
+    const list = document.getElementById('riwayatHariIniList');
+    if (!list) return;
+
+    if (state.log.length === 0) {
+        list.innerHTML = '<p class="text-xs text-gray-400 text-center py-6">Belum ada transaksi hari ini.</p>';
+        return;
+    }
+
+    // Tampilkan terbaru di atas
+    const items = [...state.log].reverse();
+    list.innerHTML = items.map(entry => {
+        const isPlus = entry.change > 0;
+        const badge = isPlus
+            ? `<span class="text-green-600 font-bold text-xs">+${entry.change}</span>`
+            : `<span class="text-red-500 font-bold text-xs">${entry.change}</span>`;
+        return `
+            <div class="flex justify-between items-center py-2 border-b border-gray-50 text-sm">
+                <div>
+                    <p class="font-semibold text-gray-700">${entry.name}</p>
+                    <p class="text-[11px] text-gray-400">${formatJam(entry.time)} &middot; jadi ${entry.qtyAfter}</p>
+                </div>
+                ${badge}
+            </div>
+        `;
+    }).join('');
+}
+
+// ==============================
+// RESET HARIAN (arsipkan dulu sebelum direset)
+// ==============================
 function resetData() {
-    if (confirm('Yakin mau reset semua angka jadi 0 buat shift baru?')) {
-        state = {};
-        saveState();
-        renderMenu();
+    if (!confirm('Yakin mau reset semua angka jadi 0 buat shift baru? Riwayat hari ini akan disimpan ke Arsip.')) {
+        return;
+    }
+
+    if (state.log.length > 0) {
+        let archive = [];
+        try {
+            archive = JSON.parse(localStorage.getItem('bobby_riwayat_archive')) || [];
+        } catch (e) {
+            archive = [];
+        }
+
+        const total = calculateTotal();
+        const tanggalEl = document.getElementById('tanggalHariIni');
+
+        archive.push({
+            tanggal: tanggalEl ? tanggalEl.innerText : new Date().toLocaleDateString('id-ID'),
+            timestamp: new Date().toISOString(),
+            total: total,
+            items: { ...state.items },
+            log: [...state.log]
+        });
+
+        localStorage.setItem('bobby_riwayat_archive', JSON.stringify(archive));
+    }
+
+    state = { items: {}, log: [] };
+    saveState();
+    renderMenu();
+    renderRiwayatHariIni();
+    renderArsipList();
+}
+
+// ==============================
+// ARSIP (riwayat hari-hari sebelumnya)
+// ==============================
+function getArchive() {
+    try {
+        return JSON.parse(localStorage.getItem('bobby_riwayat_archive')) || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function renderArsipList() {
+    const list = document.getElementById('riwayatArsipList');
+    if (!list) return;
+
+    const archive = getArchive();
+
+    if (archive.length === 0) {
+        list.innerHTML = '<p class="text-xs text-gray-400 text-center py-6">Belum ada arsip. Arsip otomatis kesimpen tiap kamu pencet "Reset Hari Ini".</p>';
+        return;
+    }
+
+    const items = [...archive].reverse(); // terbaru di atas
+    list.innerHTML = items.map((entry, idx) => {
+        const realIndex = archive.length - 1 - idx; // index asli di array archive
+        return `
+            <button onclick="tampilkanDetailArsip(${realIndex})" class="w-full flex justify-between items-center py-3 border-b border-gray-50 text-left active:bg-gray-50 rounded-lg px-2">
+                <div>
+                    <p class="font-bold text-sm text-gray-800">${entry.tanggal}</p>
+                    <p class="text-[11px] text-gray-400">${entry.log.length} transaksi</p>
+                </div>
+                <span class="font-bold text-sm text-red-600">Rp ${entry.total.toLocaleString('id-ID')}</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function tampilkanDetailArsip(index) {
+    const archive = getArchive();
+    const entry = archive[index];
+    if (!entry) return;
+
+    document.getElementById('riwayatArsipList').classList.add('hidden');
+    document.getElementById('riwayatArsipDetail').classList.remove('hidden');
+
+    const detailEl = document.getElementById('riwayatArsipDetailContent');
+    const logHtml = [...entry.log].reverse().map(l => {
+        const isPlus = l.change > 0;
+        const badge = isPlus
+            ? `<span class="text-green-600 font-bold text-xs">+${l.change}</span>`
+            : `<span class="text-red-500 font-bold text-xs">${l.change}</span>`;
+        return `
+            <div class="flex justify-between items-center py-2 border-b border-gray-50 text-sm">
+                <div>
+                    <p class="font-semibold text-gray-700">${l.name}</p>
+                    <p class="text-[11px] text-gray-400">${formatJam(l.time)} &middot; jadi ${l.qtyAfter}</p>
+                </div>
+                ${badge}
+            </div>
+        `;
+    }).join('');
+
+    detailEl.innerHTML = `
+        <div class="flex justify-between items-center mb-4">
+            <p class="font-bold text-gray-800">${entry.tanggal}</p>
+            <p class="font-bold text-red-600">Rp ${entry.total.toLocaleString('id-ID')}</p>
+        </div>
+        ${logHtml || '<p class="text-xs text-gray-400 text-center py-4">Tidak ada detail transaksi.</p>'}
+    `;
+}
+
+function tutupDetailArsip() {
+    document.getElementById('riwayatArsipDetail').classList.add('hidden');
+    document.getElementById('riwayatArsipList').classList.remove('hidden');
+}
+
+// ==============================
+// MODAL RIWAYAT (tab: Hari Ini / Arsip)
+// ==============================
+function bukaModalRiwayat() {
+    document.getElementById('modalRiwayat').classList.remove('hidden');
+    gantiTabRiwayat('hariini');
+}
+
+function tutupModalRiwayat() {
+    document.getElementById('modalRiwayat').classList.add('hidden');
+    tutupDetailArsip();
+}
+
+function gantiTabRiwayat(tab) {
+    const tabHariIni = document.getElementById('tabHariIni');
+    const tabArsip = document.getElementById('tabArsip');
+    const panelHariIni = document.getElementById('panelHariIni');
+    const panelArsip = document.getElementById('panelArsip');
+
+    if (tab === 'hariini') {
+        tabHariIni.classList.add('bg-red-600', 'text-white');
+        tabHariIni.classList.remove('bg-gray-100', 'text-gray-500');
+        tabArsip.classList.add('bg-gray-100', 'text-gray-500');
+        tabArsip.classList.remove('bg-red-600', 'text-white');
+        panelHariIni.classList.remove('hidden');
+        panelArsip.classList.add('hidden');
+        renderRiwayatHariIni();
+    } else {
+        tabArsip.classList.add('bg-red-600', 'text-white');
+        tabArsip.classList.remove('bg-gray-100', 'text-gray-500');
+        tabHariIni.classList.add('bg-gray-100', 'text-gray-500');
+        tabHariIni.classList.remove('bg-red-600', 'text-white');
+        panelArsip.classList.remove('hidden');
+        panelHariIni.classList.add('hidden');
+        tutupDetailArsip();
+        renderArsipList();
     }
 }
 
@@ -97,10 +300,10 @@ function copyToWA() {
     let currentCategory = '';
 
     menuData.forEach(item => {
-        const qty = state[item.id] || 0;
+        const qty = state.items[item.id] || 0;
         if (qty > 0) {
             hasData = true;
-            
+
             if (item.category !== currentCategory) {
                 text += `\n*${item.category.toUpperCase()}*\n`;
                 currentCategory = item.category;
@@ -137,3 +340,5 @@ if (elemenTanggal) {
 
 // Jalankan render UI pertama kali
 renderMenu();
+renderRiwayatHariIni();
+renderArsipList();
