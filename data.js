@@ -27,9 +27,13 @@ const menuData = [
     { id: 'utuh', category: 'Ayam Utuh', name: 'Ayam Utuh Kecil', price: 40000 },
     { id: 'utuh_ar', category: 'Ayam Utuh', name: 'Ayam Utuh Besar', price: 55000 },
 
+    // KULIT dan USUS Ayam
+    { id: 'kulit', category: 'Kulit dan Usus', name: 'Kulit Ayam', price: 5000 },
+    { id: 'usus', category: 'Kulit dan Usus', name: 'Usus Ayam', price: 5000 },
+
     // ADD-ON
     { id: 'add_nasi', category: 'Tambahan', name: 'Nasi', price: 4000 },
-    { id: 'add_sambal', category: 'Tambahan', name: 'Sambal Geprek', price: 4000 },
-    { id: 'add_sambal2', category: 'Tambahan', name: 'Sambal', price: 4000 },
-    { id: 'add_sambal3', category: 'Tambahan', name: 'Sambal', price: 4000 },
+    { id: 'add_geprek', category: 'Tambahan', name: 'Sambal Geprek', price: 4000 },
+    { id: 'add_blackpepper', category: 'Tambahan', name: 'Sambal Black Pepper', price: 4000 },
+    { id: 'add_keju', category: 'Tambahan', name: 'Keju', price: 4000 },
 ];
