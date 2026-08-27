@@ -222,28 +222,38 @@ function tampilkanDetailArsip(index) {
     document.getElementById('riwayatArsipDetail').classList.remove('hidden');
 
     const detailEl = document.getElementById('riwayatArsipDetailContent');
-    const logHtml = [...entry.log].reverse().map(l => {
-        const isPlus = l.change > 0;
-        const badge = isPlus
-            ? `<span class="text-green-600 font-bold text-xs">+${l.change}</span>`
-            : `<span class="text-red-500 font-bold text-xs">${l.change}</span>`;
-        return `
-            <div class="flex justify-between items-center py-2 border-b border-gray-50 text-sm">
-                <div>
-                    <p class="font-semibold text-gray-700">${l.name}</p>
-                    <p class="text-[11px] text-gray-400">${formatJam(l.time)} &middot; jadi ${l.qtyAfter}</p>
+
+    // Ringkasan stok final per item (bukan log naik-turun) yang terjual hari itu
+    let currentCategory = '';
+    let ringkasanHtml = '';
+    let adaItemTerjual = false;
+
+    menuData.forEach(item => {
+        const qty = entry.items[item.id] || 0;
+        if (qty > 0) {
+            adaItemTerjual = true;
+
+            if (item.category !== currentCategory) {
+                ringkasanHtml += `<h3 class="text-[11px] font-black text-red-600 uppercase tracking-wide mt-3 mb-1">${item.category}</h3>`;
+                currentCategory = item.category;
+            }
+
+            const subtotal = qty * item.price;
+            ringkasanHtml += `
+                <div class="flex justify-between items-center py-1.5 text-sm">
+                    <p class="text-gray-700">${item.name} <span class="text-gray-400 font-semibold">x${qty}</span></p>
+                    <p class="font-semibold text-gray-800">Rp ${subtotal.toLocaleString('id-ID')}</p>
                 </div>
-                ${badge}
-            </div>
-        `;
-    }).join('');
+            `;
+        }
+    });
 
     detailEl.innerHTML = `
-        <div class="flex justify-between items-center mb-4">
+        <div class="flex justify-between items-center mb-3">
             <p class="font-bold text-gray-800">${entry.tanggal}</p>
             <p class="font-bold text-red-600">Rp ${entry.total.toLocaleString('id-ID')}</p>
         </div>
-        ${logHtml || '<p class="text-xs text-gray-400 text-center py-4">Tidak ada detail transaksi.</p>'}
+        ${adaItemTerjual ? ringkasanHtml : '<p class="text-xs text-gray-400 text-center py-4">Tidak ada item terjual.</p>'}
     `;
 }
 
