@@ -22,6 +22,7 @@ const menuData = [
 
     // MENU SUPERHOT
     { id: 'ac_superhot_sayap', category: 'Menu KOONTOL', name: 'Superhot Sayap', price: 12000 },
+    { id: 'ac_superhot_sayap', category: 'Menu KONTL', name: 'Superhot Sayap', price: 12000 },
 
     // MENU SAUS KEJU
     { id: 'ac_keju_sayap', category: 'Menu Saus Keju', name: 'Saus Keju Sayap', price: 12000 },
