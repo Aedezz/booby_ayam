@@ -1,5 +1,5 @@
 const menuData = [
-    // CRISPY BIASA
+    // AREA ORIGINAL SEMUA DRI ATAS AMPE TITIK AKHIR - CRISPY BIASA
     { id: 'ac_sayap', category: 'Ayam Crispy (Ala Carte)', name: 'Sayap', price: 8000 },
     { id: 'ac_pahabawah', category: 'Ayam Crispy (Ala Carte)', name: 'Paha Bawah', price: 8000 },
     { id: 'ac_dada', category: 'Ayam Crispy (Ala Carte)', name: 'Dada', price: 10000 },
@@ -22,13 +22,6 @@ const menuData = [
 
     // MENU SUPERHOT
     { id: 'ac_superhot_sayap', category: 'Menu Superhot', name: 'Superhot Sayap', price: 12000 },
-    { id: 'ac_superhot_pahabawah', category: 'Menu Superhot', name: 'Superhot Paha Bawah', price: 12000 },
-    { id: 'ac_superhot_dada', category: 'Menu Superhot', name: 'Superhot Dada', price: 14000 },
-    { id: 'ac_superhot_pahaatas', category: 'Menu Superhot', name: 'Superhot Paha Atas', price: 14000 },
-    { id: 'pn_superhot_sayap', category: 'Menu Superhot', name: 'Paket Superhot Sayap + Nasi', price: 15000 },
-    { id: 'pn_superhot_pahabawah', category: 'Menu Superhot', name: 'Paket Superhot Paha Bawah + Nasi', price: 15000 },
-    { id: 'pn_superhot_dada', category: 'Menu Superhot', name: 'Paket Superhot Dada + Nasi', price: 16000 },
-    { id: 'pn_superhot_pahaatas', category: 'Menu Superhot', name: 'Paket Superhot Paha Atas + Nasi', price: 16000 },
 
     // MENU SAUS KEJU
     { id: 'ac_keju_sayap', category: 'Menu Saus Keju', name: 'Saus Keju Sayap', price: 12000 },

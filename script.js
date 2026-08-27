@@ -91,7 +91,7 @@ function resetData() {
 // Copy ke WhatsApp
 function copyToWA() {
     let dateStr = document.getElementById('tanggalHariIni').innerText;
-    let text = `*LAPORANAYAM BOBBY*\nTanggal: ${dateStr}\n\n`;
+    let text = `*LAPORAN AYAM BOBBY*\nTanggal: ${dateStr}\n\n`;
     let hasData = false;
     let total = 0;
     let currentCategory = '';
