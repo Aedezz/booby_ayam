@@ -1,7 +1,7 @@
 // State untuk menyimpan quantity
 let state = {};
 try {
-    state = JSON.parse(localStorage.getItem('dfresto_state')) || {};
+    state = JSON.parse(localStorage.getItem('bobby_state')) || {};
 } catch (e) {
     console.error("Gagal membaca localStorage, mereset state:", e);
     state = {};
@@ -76,7 +76,7 @@ function calculateTotal() {
 
 // Simpan ke Local Storage
 function saveState() {
-    localStorage.setItem('dfresto_state', JSON.stringify(state));
+    localStorage.setItem('bobby_state', JSON.stringify(state));
 }
 
 // Reset Data Harian
@@ -91,7 +91,7 @@ function resetData() {
 // Copy ke WhatsApp
 function copyToWA() {
     let dateStr = document.getElementById('tanggalHariIni').innerText;
-    let text = `*LAPORAN D'FRESTO*\nTanggal: ${dateStr}\n\n`;
+    let text = `*LAPORANAYAM BOBBY*\nTanggal: ${dateStr}\n\n`;
     let hasData = false;
     let total = 0;
     let currentCategory = '';
