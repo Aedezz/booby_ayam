@@ -1,53 +1,35 @@
 const menuData = [
-    // AREA ORIGINAL SEMUA DRI ATAS AMPE TITIK AKHIR - CRISPY BIASA
-    { id: 'ac_sayap', category: 'Ayam Crispy (Ala Carte)', name: 'Sayap', price: 8000 },
-    { id: 'ac_pahabawah', category: 'Ayam Crispy (Ala Carte)', name: 'Paha Bawah', price: 8000 },
-    { id: 'ac_dada', category: 'Ayam Crispy (Ala Carte)', name: 'Dada', price: 10000 },
-    { id: 'ac_pahaatas', category: 'Ayam Crispy (Ala Carte)', name: 'Paha Atas', price: 10000 },
+    // CRISPY ORIGINAL
+    { id: 'ori_sayap', category: 'Ayam Crispy Original', name: 'Sayap', price: 9000 },
+    { id: 'ori_pahabawah', category: 'Ayam Crispy Original', name: 'Paha Bawah', price: 10000 },
+    { id: 'ori_dada', category: 'Ayam Crispy Original', name: 'Dada', price: 12000 },
+    { id: 'ori_pahaatas', category: 'Ayam Crispy Original', name: 'Paha Atas', price: 12000 },
 
-    { id: 'pn_sayap', category: 'Paket Nasi Biasa', name: 'Paket Sayap + Nasi', price: 11000 },
-    { id: 'pn_pahabawah', category: 'Paket Nasi Biasa', name: 'Paket Paha Bawah + Nasi', price: 11000 },
-    { id: 'pn_dada', category: 'Paket Nasi Biasa', name: 'Paket Dada + Nasi', price: 13000 },
-    { id: 'pn_pahaatas', category: 'Paket Nasi Biasa', name: 'Paket Paha Atas + Nasi', price: 13000 },
+    // PAKET ORIGINAL
+    { id: 'paket_ori_sayap', category: 'Paket Ayam Crispy Original', name: 'Paket Sayap + Nasi', price: 12000 },
+    { id: 'paket_ori_pahabawah', category: 'Paket Ayam Crispy Original', name: 'Paket Paha Bawah + Nasi', price: 13000 },
+    { id: 'paket_ori_dada', category: 'Paket Ayam Crispy Original', name: 'Paket Dada + Nasi', price: 15000 },
+    { id: 'paket_ori_pahaatas', category: 'Paket Ayam Crispy Original', name: 'Paket Paha Atas + Nasi', price: 15000 },
 
-    // MENU GEPREK
-    { id: 'ac_geprek_sayap', category: 'Menu Geprek', name: 'Geprek Sayap', price: 12000 },
-    { id: 'ac_geprek_pahabawah', category: 'Menu Geprek', name: 'Geprek Paha Bawah', price: 12000 },
-    { id: 'ac_geprek_dada', category: 'Menu Geprek', name: 'Geprek Dada', price: 14000 },
-    { id: 'ac_geprek_pahaatas', category: 'Menu Geprek', name: 'Geprek Paha Atas', price: 14000 },
-    { id: 'pn_geprek_sayap', category: 'Menu Geprek', name: 'Paket Geprek Sayap + Nasi', price: 15000 },
-    { id: 'pn_geprek_pahabawah', category: 'Menu Geprek', name: 'Paket Geprek Paha Bawah + Nasi', price: 15000 },
-    { id: 'pn_geprek_dada', category: 'Menu Geprek', name: 'Paket Geprek Dada + Nasi', price: 16000 },
-    { id: 'pn_geprek_pahaatas', category: 'Menu Geprek', name: 'Paket Geprek Paha Atas + Nasi', price: 16000 },
+    // CRISPY ARABIC
+    { id: 'ar_sayap', category: 'Ayam Crispy Arabic', name: 'Sayap', price: 10000 },
+    { id: 'ar_pahabawah', category: 'Ayam Crispy Arabic', name: 'Paha Bawah', price: 11000 },
+    { id: 'ar_dada', category: 'Ayam Crispy Arabic', name: 'Dada', price: 13000 },
+    { id: 'ar_pahaatas', category: 'Ayam Crispy Arabic', name: 'Paha Atas', price: 13000 },
 
-    // MENU SUPERHOT
-    { id: 'ac_superhot_sayap', category: 'Menu KOONTOL', name: 'Superhot Sayap', price: 12000 },
-    { id: 'ac_superhot_sayap', category: 'Menu KONTL', name: 'Superhot Sayap', price: 12000 },
+    // PAKET ARABIC
+    { id: 'paket_ar_sayap', category: 'Paket Ayam Crispy Arabic', name: 'Paket Sayap + Nasi', price: 13000 },
+    { id: 'paket_ar_pahabawah', category: 'Paket Ayam Crispy Arabic', name: 'Paket Paha Bawah + Nasi', price: 14000 },
+    { id: 'paket_ar_dada', category: 'Paket Ayam Crispy Arabic', name: 'Paket Dada + Nasi', price: 16000 },
+    { id: 'paket_ar_pahaatas', category: 'Paket Ayam Crispy Arabic', name: 'Paket Paha Atas + Nasi', price: 16000 },
 
-    // MENU SAUS KEJU
-    { id: 'ac_keju_sayap', category: 'Menu Saus Keju', name: 'Saus Keju Sayap', price: 12000 },
-    { id: 'ac_keju_pahabawah', category: 'Menu Saus Keju', name: 'Saus Keju Paha Bawah', price: 12000 },
-    { id: 'ac_keju_dada', category: 'Menu Saus Keju', name: 'Saus Keju Dada', price: 14000 },
-    { id: 'ac_keju_pahaatas', category: 'Menu Saus Keju', name: 'Saus Keju Paha Atas', price: 14000 },
-    { id: 'pn_keju_sayap', category: 'Menu Saus Keju', name: 'Paket Saus Keju Sayap + Nasi', price: 15000 },
-    { id: 'pn_keju_pahabawah', category: 'Menu Saus Keju', name: 'Paket Saus Keju Paha Bawah + Nasi', price: 15000 },
-    { id: 'pn_keju_dada', category: 'Menu Saus Keju', name: 'Paket Saus Keju Dada + Nasi', price: 16000 },
-    { id: 'pn_keju_pahaatas', category: 'Menu Saus Keju', name: 'Paket Saus Keju Paha Atas + Nasi', price: 16000 },
-
-    // MENU MIX (SUPERHOT + KEJU)
-    { id: 'ac_mix_sayap', category: 'Menu Mix (Superhot + Keju)', name: 'Superhot + Keju Sayap', price: 16000 },
-    { id: 'ac_mix_pahabawah', category: 'Menu Mix (Superhot + Keju)', name: 'Superhot + Keju Paha Bawah', price: 16000 },
-    { id: 'ac_mix_dada', category: 'Menu Mix (Superhot + Keju)', name: 'Superhot + Keju Dada', price: 18000 },
-    { id: 'ac_mix_pahaatas', category: 'Menu Mix (Superhot + Keju)', name: 'Superhot + Keju Paha Atas', price: 18000 },
-    { id: 'pn_mix_sayap', category: 'Menu Mix (Superhot + Keju)', name: 'Paket Superhot + Keju Sayap + Nasi', price: 17000 },
-    { id: 'pn_mix_pahabawah', category: 'Menu Mix (Superhot + Keju)', name: 'Paket Superhot + Keju Paha Bawah + Nasi', price: 17000 },
-    { id: 'pn_mix_dada', category: 'Menu Mix (Superhot + Keju)', name: 'Paket Superhot + Keju Dada + Nasi', price: 19000 },
-    { id: 'pn_mix_pahaatas', category: 'Menu Mix (Superhot + Keju)', name: 'Paket Superhot + Keju Paha Atas + Nasi', price: 19000 },
+    // AYAM UTUH
+    { id: 'utuh', category: 'Ayam Utuh', name: 'Ayam Utuh Kecil', price: 40000 },
+    { id: 'utuh_ar', category: 'Ayam Utuh', name: 'Ayam Utuh Besar', price: 55000 },
 
     // ADD-ON
     { id: 'add_nasi', category: 'Tambahan', name: 'Nasi', price: 4000 },
     { id: 'add_sambal', category: 'Tambahan', name: 'Sambal Geprek', price: 4000 },
-    { id: 'add_superhot', category: 'Tambahan', name: 'Superhot', price: 4000 },
-    { id: 'add_keju', category: 'Tambahan', name: 'Keju', price: 4000 
-    },
+    { id: 'add_sambal', category: 'Tambahan', name: 'Sambal', price: 4000 },
+    { id: 'add_sambal', category: 'Tambahan', name: 'Sambal', price: 4000 },
 ];
