@@ -3280,6 +3280,513 @@ function submitMasak(
 
 }
 
+// ============================================================
+// MAPPING PRODUK
+// ============================================================
+//
+// Mapping:
+// MENU KASIR
+//      ↓
+// JENIS PRODUK
+//      ↓
+// JUMLAH PER PORSI
+//
+// Contoh:
+// Ayam Dada  → Dada x1
+// Paket 2    → Dada x1 + Sayap x1
+// ============================================================
+
+function tambahMappingRow(
+    menuItemId
+) {
+
+    if (
+        !Array.isArray(
+            produkMapping[
+                menuItemId
+            ]
+        )
+    ) {
+
+        produkMapping[
+            menuItemId
+        ] = [];
+
+    }
+
+
+    produkMapping[
+        menuItemId
+    ].push({
+
+        jenisProduk:
+            '',
+
+        jumlahPerPorsi:
+            1
+
+    });
+
+
+    saveJSON(
+        SK_MAPPING,
+        produkMapping
+    );
+
+
+    refreshModalMapping();
+
+}
+
+
+function hapusMappingRow(
+    menuItemId,
+    index
+) {
+
+    if (
+        !Array.isArray(
+            produkMapping[
+                menuItemId
+            ]
+        )
+    ) {
+
+        return;
+
+    }
+
+
+    if (
+        !produkMapping[
+            menuItemId
+        ][index]
+    ) {
+
+        return;
+
+    }
+
+
+    produkMapping[
+        menuItemId
+    ].splice(
+        index,
+        1
+    );
+
+
+    if (
+        produkMapping[
+            menuItemId
+        ].length ===
+            0
+    ) {
+
+        delete produkMapping[
+            menuItemId
+        ];
+
+    }
+
+
+    saveJSON(
+        SK_MAPPING,
+        produkMapping
+    );
+
+
+    refreshModalMapping();
+
+    renderRekonsiliasi();
+
+}
+
+
+function updateMappingRowJenis(
+    menuItemId,
+    index,
+    jenisProduk
+) {
+
+    if (
+        !produkMapping[
+            menuItemId
+        ] ||
+        !produkMapping[
+            menuItemId
+        ][index]
+    ) {
+
+        return;
+
+    }
+
+
+    produkMapping[
+        menuItemId
+    ][index].jenisProduk =
+        safeString(
+            jenisProduk
+        ).trim();
+
+
+    saveJSON(
+        SK_MAPPING,
+        produkMapping
+    );
+
+
+    renderRekonsiliasi();
+
+}
+
+
+function updateMappingRowJumlah(
+    menuItemId,
+    index,
+    jumlah
+) {
+
+    if (
+        !produkMapping[
+            menuItemId
+        ] ||
+        !produkMapping[
+            menuItemId
+        ][index]
+    ) {
+
+        return;
+
+    }
+
+
+    const nilai =
+        Math.max(
+            1,
+            safeNumber(
+                jumlah,
+                1
+            )
+        );
+
+
+    produkMapping[
+        menuItemId
+    ][index].jumlahPerPorsi =
+        nilai;
+
+
+    saveJSON(
+        SK_MAPPING,
+        produkMapping
+    );
+
+
+    renderRekonsiliasi();
+
+}
+
+
+function bukaModalMapping() {
+
+    const jenisList =
+        getJenisProdukList();
+
+
+    if (
+        typeof menuData ===
+            'undefined' ||
+        !Array.isArray(
+            menuData
+        ) ||
+        menuData.length ===
+            0
+    ) {
+
+        bukaModalForm(
+
+            'Mapping Produk',
+
+            `
+                <p class="text-xs text-gray-400 text-center py-6">
+                    Data menu kasir belum ditemukan.
+                </p>
+            `
+
+        );
+
+        return;
+
+    }
+
+
+    if (
+        jenisList.length ===
+            0
+    ) {
+
+        bukaModalForm(
+
+            'Mapping Produk',
+
+            `
+                <p class="text-xs text-gray-400 text-center py-6">
+                    Belum ada jenis produk.
+                    <br>
+                    Tambahkan konversi pada bahan baku terlebih dahulu.
+                </p>
+            `
+
+        );
+
+        return;
+
+    }
+
+
+    bukaModalForm(
+
+        'Mapping Produk ke Kasir',
+
+        buildMappingHtml(
+            jenisList
+        )
+
+    );
+
+}
+
+
+function refreshModalMapping() {
+
+    const body =
+        getElement(
+            'modalFormBody'
+        );
+
+
+    if (!body) {
+
+        return;
+
+    }
+
+
+    body.innerHTML =
+        buildMappingHtml(
+            getJenisProdukList()
+        );
+
+}
+
+
+function buildMappingHtml(
+    jenisList
+) {
+
+    if (
+        typeof menuData ===
+            'undefined' ||
+        !Array.isArray(
+            menuData
+        )
+    ) {
+
+        return `
+
+            <p class="text-xs text-gray-400 text-center py-6">
+                Data menu kasir belum ditemukan.
+            </p>
+
+        `;
+
+    }
+
+
+    const rows =
+        menuData
+            .map(
+                item => {
+
+                    const mappings =
+                        Array.isArray(
+                            produkMapping[
+                                item.id
+                            ]
+                        )
+                            ? produkMapping[
+                                item.id
+                            ]
+                            : [];
+
+
+                    const mappingRowsHtml =
+                        mappings
+                            .map(
+                                (
+                                    mapping,
+                                    index
+                                ) => {
+
+                                    const selectedJenis =
+                                        safeString(
+                                            mapping.jenisProduk
+                                        );
+
+
+                                    const options =
+                                        `
+                                        <option value="">
+                                            - pilih jenis -
+                                        </option>
+                                        ` +
+
+                                        jenisList
+                                            .map(
+                                                jenis => `
+
+                                                    <option
+                                                        value="${escapeHTML(
+                                                            jenis
+                                                        )}"
+                                                        ${
+                                                            selectedJenis ===
+                                                            jenis
+                                                                ? 'selected'
+                                                                : ''
+                                                        }
+                                                    >
+                                                        ${escapeHTML(
+                                                            jenis
+                                                        )}
+                                                    </option>
+
+                                                `
+                                            )
+                                            .join('');
+
+
+                                    return `
+
+                                        <div class="flex gap-2 mb-1.5 items-center">
+
+                                            <select
+                                                onchange="updateMappingRowJenis('${escapeHTML(
+                                                    item.id
+                                                )}', ${index}, this.value)"
+                                                class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white"
+                                            >
+
+                                                ${options}
+
+                                            </select>
+
+
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                value="${Math.max(
+                                                    1,
+                                                    safeNumber(
+                                                        mapping.jumlahPerPorsi,
+                                                        1
+                                                    )
+                                                )}"
+                                                onchange="updateMappingRowJumlah('${escapeHTML(
+                                                    item.id
+                                                )}', ${index}, this.value)"
+                                                class="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs"
+                                            >
+
+
+                                            <button
+                                                type="button"
+                                                onclick="hapusMappingRow('${escapeHTML(
+                                                    item.id
+                                                )}', ${index})"
+                                                class="text-red-500 font-bold px-1"
+                                            >
+                                                ✕
+                                            </button>
+
+                                        </div>
+
+                                    `;
+
+                                }
+                            )
+                            .join('');
+
+
+                    return `
+
+                        <div class="border-b border-gray-100 py-3">
+
+                            <p class="text-sm font-bold text-gray-700 mb-1">
+
+                                ${escapeHTML(
+                                    item.name
+                                )}
+
+                            </p>
+
+
+                            ${
+                                mappingRowsHtml ||
+
+                                `
+                                    <p class="text-[11px] text-gray-300 mb-1">
+                                        Belum dipetakan
+                                    </p>
+                                `
+                            }
+
+
+                            <button
+                                type="button"
+                                onclick="tambahMappingRow('${escapeHTML(
+                                    item.id
+                                )}')"
+                                class="text-[11px] font-bold text-red-600"
+                            >
+                                + Tambah potongan
+                            </button>
+
+                        </div>
+
+                    `;
+
+                }
+            )
+            .join('');
+
+
+    return `
+
+        <div class="mb-3">
+
+            <p class="text-[11px] text-gray-400 leading-relaxed">
+
+                Tentukan produk kasir menggunakan
+                jenis potongan dari bahan baku.
+
+                <br>
+
+                Angka di sebelah kanan adalah
+                jumlah potongan per 1 porsi.
+
+            </p>
+
+        </div>
+
+
+        ${rows}
+
+    `;
+
+}
 
 // ============================================================
 // HAPUS BAHAN BAKU
@@ -6552,6 +7059,27 @@ window.getJumlahDikembalikanHariIni =
 
 window.renderStokDikembalikan =
     renderStokDikembalikan;
+
+window.tambahMappingRow =
+tambahMappingRow;
+
+window.hapusMappingRow =
+    hapusMappingRow;
+
+window.updateMappingRowJenis =
+    updateMappingRowJenis;
+
+window.updateMappingRowJumlah =
+    updateMappingRowJumlah;
+
+window.bukaModalMapping =
+    bukaModalMapping;
+
+window.refreshModalMapping =
+    refreshModalMapping;
+
+window.buildMappingHtml =
+    buildMappingHtml;
 
 window.renderBahanBakuList =
     renderBahanBakuList;
