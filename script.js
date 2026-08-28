@@ -665,6 +665,7 @@ function resetData() {
         qris: 0
     };
 
+    localStorage.removeItem('bobby_ayam_kembali');
 
     saveState();
 
