@@ -106,7 +106,7 @@ function simpanSisaFisik(jenisProduk, jumlah) {
 }
 
 // ==============================
-// PENGELUARAN HARI INI (dari Stok Masuk saja, karena Keluar cuma perpindahan)
+// PENGELUARAN & PEMASUKAN HARI INI
 // ==============================
 function hitungPengeluaranHariIni() {
     const tanggal = todayKey();
@@ -115,10 +115,36 @@ function hitungPengeluaranHariIni() {
         .reduce((s, x) => s + (x.jumlah * (x.harga || 0)), 0);
 }
 
+// Tambahan: Hitung total uang dari kasir (Penjualan)
+function hitungPemasukanHariIni() {
+    let total = 0;
+    if (typeof state !== 'undefined' && state && state.items && typeof menuData !== 'undefined') {
+        Object.keys(state.items).forEach(menuId => {
+            const qty = state.items[menuId];
+            const menu = menuData.find(m => m.id === menuId);
+            if (menu && qty > 0) {
+                total += (qty * (menu.price || 0));
+            }
+        });
+    }
+    return total;
+}
+
+// Update render buat nampilin Keluar, Masuk, dan Selisih
 function renderTotalPengeluaran() {
     const el = document.getElementById('totalPengeluaranStock');
     if (!el) return;
-    el.innerText = 'Rp ' + hitungPengeluaranHariIni().toLocaleString('id-ID');
+    
+    const pengeluaran = hitungPengeluaranHariIni();
+    const pemasukan = hitungPemasukanHariIni();
+    const selisih = pemasukan - pengeluaran; 
+    const warnaSelisih = selisih >= 0 ? 'text-green-600' : 'text-red-500';
+
+    el.innerHTML = `
+        <span class="text-gray-500">Beli Bahan: Rp ${pengeluaran.toLocaleString('id-ID')}</span> <br>
+        <span class="text-blue-500">Hasil Jual: Rp ${pemasukan.toLocaleString('id-ID')}</span> <br>
+        <span class="font-bold ${warnaSelisih}">Selisih: Rp ${selisih.toLocaleString('id-ID')}</span>
+    `;
 }
 
 // ==============================
@@ -163,15 +189,21 @@ function copyLaporanStockToWA() {
         });
     }
 
-    text += `\n------------------\n`;
-    text += `*TOTAL PENGELUARAN: Rp ${totalPengeluaran.toLocaleString('id-ID')}*`;
+    const pemasukan = hitungPemasukanHariIni();
+        const selisih = pemasukan - totalPengeluaran;
+        const statusDuit = selisih >= 0 ? 'LABA / PLUS' : 'RUGI / NOMBOK';
 
-    navigator.clipboard.writeText(text).then(() => {
-        alert('Mantap! Laporan stock udah disalin, tinggal paste ke WA.');
-    }).catch(err => {
-        console.error('Gagal copy text: ', err);
-        alert('Gagal menyalin otomatis. Silakan coba lagi.');
-    });
+        text += `\n------------------\n`;
+        text += `*TOTAL BELI BAHAN: Rp ${totalPengeluaran.toLocaleString('id-ID')}*\n`;
+        text += `*TOTAL PENJUALAN: Rp ${pemasukan.toLocaleString('id-ID')}*\n`;
+        text += `*SELISIH (${statusDuit}): Rp ${selisih.toLocaleString('id-ID')}*`;
+
+        navigator.clipboard.writeText(text).then(() => {
+            alert('Mantap! Laporan stock udah disalin, tinggal paste ke WA.');
+        }).catch(err => {
+            console.error('Gagal copy text: ', err);
+            alert('Gagal menyalin otomatis. Silakan coba lagi.');
+        });
 }
 
 // ==============================
@@ -197,11 +229,19 @@ function submitStokMasuk(bahanBakuId) {
 
     stokMasukList.push({
         id: 'in_' + Date.now(),
-        bahanBakuId, jumlah, tanggal, harga, catatan,
+        bahanBakuId, 
+        jumlah, 
+        tanggal, 
+        harga, 
+        catatan,
         timestamp: new Date().toISOString()
     });
     saveJSON(SK_MASUK, stokMasukList);
+    
+    // Refresh tampilan stok dan total pengeluaran harian secara bersamaan
     renderSemuaStock();
+    renderTotalPengeluaran();
+    
     tutupModalForm();
 }
 
