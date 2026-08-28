@@ -320,64 +320,34 @@
 
         </section>
 
-        <!-- AYAM UTUH DIKEMBALIKAN -->
-<section class="mb-6">
+        <!-- ===================================================== -->
+        <!-- SECTION PENGEMBALIAN STOK -->
+        <!-- ===================================================== -->
 
-    <div class="flex justify-between items-center mb-3">
-        <h2 class="text-xs font-black text-red-700 uppercase tracking-wider">
-            Ayam Utuh Dikembalikan
-        </h2>
-    </div>
+        <section class="mb-6">
 
-    <div class="bg-gray-50 border border-gray-100 rounded-xl p-4">
+            <div class="flex justify-between items-center mb-3">
 
-        <p class="text-[11px] text-gray-400 mb-3">
-            Ayam utuh yang sudah dikeluarkan ke lapangan tetapi tidak terjual dan dikembalikan.
-        </p>
-
-        <div class="flex justify-between items-center">
-
-            <div>
-                <p class="text-sm font-bold text-gray-800">
-                    Dikembalikan
-                </p>
-
-                <p class="text-[10px] text-gray-400">
-                    Satuan ekor
-                </p>
-            </div>
-
-            <div class="flex items-center gap-3 bg-white px-2 py-1.5 rounded-full border border-gray-200">
-
-                <button
-                    onclick="ubahAyamKembali(-1)"
-                    class="w-8 h-8 flex justify-center items-center bg-gray-50 text-gray-600 rounded-full shadow-sm font-bold text-lg"
-                >
-                    -
-                </button>
-
-                <span
-                    id="jumlahAyamKembali"
-                    class="w-12 text-center font-bold text-gray-800 text-sm"
-                >
-                    0
-                </span>
-
-                <button
-                    onclick="ubahAyamKembali(1)"
-                    class="w-8 h-8 flex justify-center items-center bg-red-100 text-red-600 rounded-full shadow-sm font-bold text-lg"
-                >
-                    +
-                </button>
+                <h2 class="text-xs font-black text-red-700 uppercase tracking-wider">
+                    Stok Dikembalikan
+                </h2>
 
             </div>
 
-        </div>
 
-    </div>
+            <p class="text-[11px] text-gray-400 mb-3">
+                Kembalikan stok yang sebelumnya sudah dikeluarkan
+                ke lapangan. Daftar bahan otomatis mengikuti
+                Bahan Baku & Stok di atas.
+            </p>
 
-</section>
 
+            <div
+                id="listStokDikembalikan"
+                class="space-y-3"
+            ></div>
+
+        </section>
 
         <!-- BOTTOM ACTION BAR STOCK -->
         <div
