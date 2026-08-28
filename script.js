@@ -1,28 +1,30 @@
 // ==============================
 // STATE
+// state.items  -> { itemId: qty }
+// state.log    -> [{ id, name, change, qtyAfter, time }]  (riwayat hari berjalan)
 // ==============================
-let state = { items: {}, log: [], qris: 0 };
+let state = { items: {}, log: [] };
 try {
     const saved = JSON.parse(localStorage.getItem('bobby_state'));
     if (saved) {
-        state.items = saved.items || saved || {};
+        state.items = saved.items || saved || {}; // saved format lama (langsung {id: qty}) tetap kebaca
         state.log = saved.log || [];
-        state.qris = saved.qris || 0;
     }
 } catch (e) {
     console.error("Gagal membaca localStorage, mereset state:", e);
-    state = { items: {}, log: [], qris: 0 };
+    state = { items: {}, log: [] };
 }
 
 // Render UI Menu
 function renderMenu() {
     const container = document.getElementById('menuContainer');
-    if (!container) return;
+    if (!container) return; // Safety check
     container.innerHTML = '';
 
     let currentCategory = '';
 
     menuData.forEach(item => {
+        // Render Header Kategori
         if (item.category !== currentCategory) {
             const catHeader = document.createElement('h2');
             catHeader.className = 'text-xs font-black text-red-700 bg-red-50 border-l-4 border-red-600 px-3 py-2 mt-6 mb-3 tracking-wider uppercase rounded-r-md shadow-sm';
@@ -33,6 +35,7 @@ function renderMenu() {
 
         const qty = state.items[item.id] || 0;
 
+        // Render Item Baris
         const div = document.createElement('div');
         div.className = 'flex justify-between items-center py-3 border-b border-gray-100';
         div.innerHTML = `
@@ -49,25 +52,20 @@ function renderMenu() {
         container.appendChild(div);
     });
 
-    // Set nilai awal input QRIS jika ada
-    const inputQris = document.getElementById('inputQris');
-    if (inputQris) {
-        inputQris.value = state.qris > 0 ? state.qris : '';
-    }
-
     calculateTotal();
 }
 
-// Update Quantity
+// Fungsi Update Quantity
 function updateQty(id, change) {
     let currentQty = state.items[id] || 0;
     let newQty = currentQty + change;
 
     if (newQty < 0) newQty = 0;
-    if (newQty === currentQty) return;
+    if (newQty === currentQty) return; // gak ada perubahan nyata (misal minus dari 0)
 
     state.items[id] = newQty;
 
+    // Catat riwayat transaksi SAAT ITU JUGA
     const item = menuData.find(m => m.id === id);
     if (item) {
         state.log.push({
@@ -85,15 +83,7 @@ function updateQty(id, change) {
     renderRiwayatHariIni();
 }
 
-// Update nilai QRIS dari Input UI
-function updateQris(val) {
-    const nominal = parseInt(val) || 0;
-    state.qris = nominal;
-    saveState();
-    calculateTotal();
-}
-
-// Hitung Total Omset & Cash (Omset - QRIS)
+// Hitung Total Omset
 function calculateTotal() {
     let total = 0;
     menuData.forEach(item => {
@@ -101,23 +91,20 @@ function calculateTotal() {
         total += qty * item.price;
     });
 
-    const cash = total - state.qris;
-
     const totalEl = document.getElementById('totalOmset');
-    const cashEl = document.getElementById('totalCash');
-
-    if (totalEl) totalEl.innerText = 'Rp ' + total.toLocaleString('id-ID');
-    if (cashEl) cashEl.innerText = 'Rp ' + (cash < 0 ? 0 : cash).toLocaleString('id-ID');
-
-    return { total, qris: state.qris, cash: cash < 0 ? 0 : cash };
+    if (totalEl) {
+        totalEl.innerText = 'Rp ' + total.toLocaleString('id-ID');
+    }
+    return total;
 }
 
+// Simpan ke Local Storage
 function saveState() {
     localStorage.setItem('bobby_state', JSON.stringify(state));
 }
 
 // ==============================
-// RIWAYAT HARI INI
+// RIWAYAT HARI INI (real-time)
 // ==============================
 function formatJam(isoString) {
     const d = new Date(isoString);
@@ -133,6 +120,7 @@ function renderRiwayatHariIni() {
         return;
     }
 
+    // Tampilkan terbaru di atas
     const items = [...state.log].reverse();
     list.innerHTML = items.map(entry => {
         const isPlus = entry.change > 0;
@@ -152,14 +140,14 @@ function renderRiwayatHariIni() {
 }
 
 // ==============================
-// RESET HARIAN
+// RESET HARIAN (arsipkan dulu sebelum direset)
 // ==============================
 function resetData() {
     if (!confirm('Yakin mau reset semua angka jadi 0 buat shift baru? Riwayat hari ini akan disimpan ke Arsip.')) {
         return;
     }
 
-    if (state.log.length > 0 || state.qris > 0) {
+    if (state.log.length > 0) {
         let archive = [];
         try {
             archive = JSON.parse(localStorage.getItem('bobby_riwayat_archive')) || [];
@@ -167,15 +155,13 @@ function resetData() {
             archive = [];
         }
 
-        const totals = calculateTotal();
+        const total = calculateTotal();
         const tanggalEl = document.getElementById('tanggalHariIni');
 
         archive.push({
             tanggal: tanggalEl ? tanggalEl.innerText : new Date().toLocaleDateString('id-ID'),
             timestamp: new Date().toISOString(),
-            total: totals.total,
-            qris: totals.qris,
-            cash: totals.cash,
+            total: total,
             items: { ...state.items },
             log: [...state.log]
         });
@@ -183,7 +169,7 @@ function resetData() {
         localStorage.setItem('bobby_riwayat_archive', JSON.stringify(archive));
     }
 
-    state = { items: {}, log: [], qris: 0 };
+    state = { items: {}, log: [] };
     saveState();
     renderMenu();
     renderRiwayatHariIni();
@@ -191,7 +177,7 @@ function resetData() {
 }
 
 // ==============================
-// ARSIP
+// ARSIP (riwayat hari-hari sebelumnya)
 // ==============================
 function getArchive() {
     try {
@@ -208,18 +194,18 @@ function renderArsipList() {
     const archive = getArchive();
 
     if (archive.length === 0) {
-        list.innerHTML = '<p class="text-xs text-gray-400 text-center py-6">Belum ada arsip.</p>';
+        list.innerHTML = '<p class="text-xs text-gray-400 text-center py-6">Belum ada arsip. Arsip otomatis kesimpen tiap kamu pencet "Reset Hari Ini".</p>';
         return;
     }
 
-    const items = [...archive].reverse();
+    const items = [...archive].reverse(); // terbaru di atas
     list.innerHTML = items.map((entry, idx) => {
-        const realIndex = archive.length - 1 - idx;
+        const realIndex = archive.length - 1 - idx; // index asli di array archive
         return `
             <button onclick="tampilkanDetailArsip(${realIndex})" class="w-full flex justify-between items-center py-3 border-b border-gray-50 text-left active:bg-gray-50 rounded-lg px-2">
                 <div>
                     <p class="font-bold text-sm text-gray-800">${entry.tanggal}</p>
-                    <p class="text-[11px] text-gray-400">Cash: Rp ${(entry.cash || 0).toLocaleString('id-ID')} | QRIS: Rp ${(entry.qris || 0).toLocaleString('id-ID')}</p>
+                    <p class="text-[11px] text-gray-400">${entry.log.length} transaksi</p>
                 </div>
                 <span class="font-bold text-sm text-red-600">Rp ${entry.total.toLocaleString('id-ID')}</span>
             </button>
@@ -237,6 +223,7 @@ function tampilkanDetailArsip(index) {
 
     const detailEl = document.getElementById('riwayatArsipDetailContent');
 
+    // Ringkasan stok final per item (bukan log naik-turun) yang terjual hari itu
     let currentCategory = '';
     let ringkasanHtml = '';
     let adaItemTerjual = false;
@@ -262,13 +249,9 @@ function tampilkanDetailArsip(index) {
     });
 
     detailEl.innerHTML = `
-        <div class="border-b pb-3 mb-3">
-            <p class="font-bold text-gray-800 text-base mb-1">${entry.tanggal}</p>
-            <div class="text-xs text-gray-600 space-y-1">
-                <div class="flex justify-between"><span>Total Omset:</span> <span class="font-bold">Rp ${entry.total.toLocaleString('id-ID')}</span></div>
-                <div class="flex justify-between text-blue-600"><span>QRIS (Digital):</span> <span class="font-bold">Rp ${(entry.qris || 0).toLocaleString('id-ID')}</span></div>
-                <div class="flex justify-between text-green-600"><span>Setoran Cash:</span> <span class="font-bold">Rp ${(entry.cash || 0).toLocaleString('id-ID')}</span></div>
-            </div>
+        <div class="flex justify-between items-center mb-3">
+            <p class="font-bold text-gray-800">${entry.tanggal}</p>
+            <p class="font-bold text-red-600">Rp ${entry.total.toLocaleString('id-ID')}</p>
         </div>
         ${adaItemTerjual ? ringkasanHtml : '<p class="text-xs text-gray-400 text-center py-4">Tidak ada item terjual.</p>'}
     `;
@@ -280,7 +263,7 @@ function tutupDetailArsip() {
 }
 
 // ==============================
-// MODAL RIWAYAT
+// MODAL RIWAYAT (tab: Hari Ini / Arsip)
 // ==============================
 function bukaModalRiwayat() {
     document.getElementById('modalRiwayat').classList.remove('hidden');
@@ -319,8 +302,56 @@ function gantiTabRiwayat(tab) {
 }
 
 // ==============================
-// COPY KE WHATSAPP
+// NAVIGASI HALAMAN (Kasir / Stock)
 // ==============================
+function bukaMenuNav() {
+    document.getElementById('menuNav').classList.remove('hidden');
+}
+
+function tutupMenuNav() {
+    document.getElementById('menuNav').classList.add('hidden');
+}
+
+function pindahHalaman(halaman) {
+    const pageKasir = document.getElementById('pageKasir');
+    const pageStock = document.getElementById('pageStock');
+    const navKasir = document.getElementById('navKasir');
+    const navStock = document.getElementById('navStock');
+    const headerActionsKasir = document.getElementById('headerActionsKasir');
+    const headerActionsStock = document.getElementById('headerActionsStock');
+
+    if (halaman === 'kasir') {
+        pageKasir.classList.remove('hidden');
+        pageStock.classList.add('hidden');
+        headerActionsKasir.classList.remove('hidden');
+        headerActionsKasir.classList.add('flex');
+        headerActionsStock.classList.add('hidden');
+        headerActionsStock.classList.remove('flex');
+        navKasir.classList.add('bg-red-50', 'text-red-700');
+        navKasir.classList.remove('bg-gray-50', 'text-gray-600');
+        navStock.classList.add('bg-gray-50', 'text-gray-600');
+        navStock.classList.remove('bg-red-50', 'text-red-700');
+    } else {
+        pageStock.classList.remove('hidden');
+        pageKasir.classList.add('hidden');
+        headerActionsStock.classList.remove('hidden');
+        headerActionsStock.classList.add('flex');
+        headerActionsKasir.classList.add('hidden');
+        headerActionsKasir.classList.remove('flex');
+        navStock.classList.add('bg-red-50', 'text-red-700');
+        navStock.classList.remove('bg-gray-50', 'text-gray-600');
+        navKasir.classList.add('bg-gray-50', 'text-gray-600');
+        navKasir.classList.remove('bg-red-50', 'text-red-700');
+
+        if (typeof renderSemuaStock === 'function') {
+            renderSemuaStock();
+        }
+    }
+
+    tutupMenuNav();
+}
+
+// Copy ke WhatsApp
 function copyToWA() {
     let dateStr = document.getElementById('tanggalHariIni').innerText;
     let text = `*LAPORAN AYAM BOBBY*\nTanggal: ${dateStr}\n\n`;
@@ -343,34 +374,31 @@ function copyToWA() {
         }
     });
 
-    if (!hasData && state.qris === 0) {
+    if (!hasData) {
         alert('Laporan masih kosong cuy, isi dulu angkanya.');
         return;
     }
 
-    const qrisVal = state.qris || 0;
-    const cashVal = total - qrisVal;
-
     text += `\n------------------\n`;
-    text += `*TOTAL OMSET:* Rp ${total.toLocaleString('id-ID')}\n`;
-    text += `*QRIS (Digital):* Rp ${qrisVal.toLocaleString('id-ID')}\n`;
-    text += `*SETORAN CASH:* Rp ${(cashVal < 0 ? 0 : cashVal).toLocaleString('id-ID')}`;
+    text += `*TOTAL OMSET: Rp ${total.toLocaleString('id-ID')}*`;
 
     navigator.clipboard.writeText(text).then(() => {
-        alert('Mantap! Format WA udah disalin (Omset, QRIS, & Cash). Tinggal paste aja.');
+        alert('Mantap! Format WA udah disalin, tinggal paste aja bro.');
     }).catch(err => {
         console.error('Gagal copy text: ', err);
         alert('Gagal menyalin otomatis. Silakan coba lagi.');
     });
 }
 
-// Inisialisasi Tanggal & UI
+// --- INISIALISASI SAAT SCRIPT DIMUAT ---
+// Set tanggal
 const tglOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
 const elemenTanggal = document.getElementById('tanggalHariIni');
 if (elemenTanggal) {
     elemenTanggal.innerText = new Date().toLocaleDateString('id-ID', tglOptions);
 }
 
+// Jalankan render UI pertama kali
 renderMenu();
 renderRiwayatHariIni();
 renderArsipList();
