@@ -2367,6 +2367,313 @@ function submitTambahBahan() {
 
 
 // ============================================================
+// EDIT BAHAN BAKU
+// ============================================================
+//
+// Edit tidak membuat id/saldo baru.
+// Hanya nama, satuan, dan resepKonversi yang diperbarui.
+// ============================================================
+
+function bukaModalEditBahan(
+    bahanBakuId
+) {
+
+    const bahan =
+        getBahanById(
+            bahanBakuId
+        );
+
+
+    if (!bahan) {
+
+        alert(
+            'Bahan baku tidak ditemukan.'
+        );
+
+        return;
+
+    }
+
+
+    tempResep =
+        Array.isArray(
+            bahan.resepKonversi
+        )
+            ? bahan.resepKonversi.map(
+                row => ({
+                    ...row
+                })
+            )
+            : [];
+
+
+    renderFormEditBahan(
+        bahanBakuId
+    );
+
+}
+
+
+function renderFormEditBahan(
+    bahanBakuId
+) {
+
+    const bahan =
+        getBahanById(
+            bahanBakuId
+        );
+
+
+    if (!bahan) {
+
+        tutupModalForm();
+
+        return;
+
+    }
+
+
+    const rows =
+        tempResep
+            .map(
+                (
+                    row,
+                    index
+                ) => `
+
+                    <div class="flex gap-2 mb-2 items-center">
+
+                        <input
+                            type="text"
+                            value="${escapeHTML(row.jenisProduk)}"
+                            onchange="tempResep[${index}].jenisProduk=this.value"
+                            placeholder="Nama potongan"
+                            class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
+                        >
+
+                        <input
+                            type="number"
+                            min="0"
+                            value="${safeNumber(row.jumlahPerUnit, 1)}"
+                            onchange="tempResep[${index}].jumlahPerUnit=Number(this.value)"
+                            class="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
+                        >
+
+                        <button
+                            onclick="tempResep.splice(${index},1);renderFormEditBahan('${escapeHTML(bahan.id)}')"
+                            class="text-red-500 font-bold px-2"
+                        >
+                            ✕
+                        </button>
+
+                    </div>
+
+                `
+            )
+            .join('');
+
+
+    bukaModalForm(
+
+        'Edit Bahan Baku',
+
+        `
+
+            <div class="mb-3">
+
+                <label class="text-xs font-bold text-gray-500">
+                    Nama Bahan Baku
+                </label>
+
+                <input
+                    id="inputNamaBahanEdit"
+                    type="text"
+                    value="${escapeHTML(bahan.nama)}"
+                    placeholder="Contoh: Ayam"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
+                >
+
+            </div>
+
+
+            <div class="mb-3">
+
+                <label class="text-xs font-bold text-gray-500">
+                    Satuan
+                </label>
+
+                <input
+                    id="inputSatuanBahanEdit"
+                    type="text"
+                    value="${escapeHTML(bahan.satuan)}"
+                    placeholder="Contoh: ekor / kg / liter"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
+                >
+
+            </div>
+
+
+            <div class="mb-3">
+
+                <label class="text-xs font-bold text-gray-500">
+                    Konversi Hasil Olahan
+                </label>
+
+                <p class="text-[11px] text-gray-400 mb-2">
+                    Contoh: 1 ekor ayam menghasilkan 4 dada dan 2 sayap.
+                </p>
+
+                ${rows}
+
+
+                <button
+                    onclick="tempResep.push({jenisProduk:'',jumlahPerUnit:1});renderFormEditBahan('${escapeHTML(bahan.id)}')"
+                    class="text-xs font-bold text-red-600 mt-1"
+                >
+                    + Tambah Jenis Potongan
+                </button>
+
+            </div>
+
+
+            <p class="text-[11px] text-gray-400 mb-3">
+
+                Nama jenis potongan yang dipakai di Mapping Produk
+                sebaiknya jangan diganti, supaya mapping ke menu kasir
+                tidak putus.
+
+            </p>
+
+
+            <button
+                onclick="submitEditBahan('${escapeHTML(bahan.id)}')"
+                class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-2"
+            >
+                Simpan Perubahan
+            </button>
+
+        `
+    );
+
+}
+
+
+function submitEditBahan(
+    bahanBakuId
+) {
+
+    const bahan =
+        getBahanById(
+            bahanBakuId
+        );
+
+
+    if (!bahan) {
+
+        alert(
+            'Bahan baku tidak ditemukan.'
+        );
+
+        return;
+
+    }
+
+
+    const namaEl =
+        getElement(
+            'inputNamaBahanEdit'
+        );
+
+
+    const satuanEl =
+        getElement(
+            'inputSatuanBahanEdit'
+        );
+
+
+    const nama =
+        namaEl
+            ? namaEl.value.trim()
+            : '';
+
+
+    const satuan =
+        satuanEl
+            ? satuanEl.value.trim()
+            : '';
+
+
+    if (
+        !nama ||
+        !satuan
+    ) {
+
+        alert(
+            'Nama dan satuan wajib diisi.'
+        );
+
+        return;
+
+    }
+
+
+    const resepValid =
+        tempResep
+            .filter(
+                row =>
+                    safeString(
+                        row.jenisProduk
+                    ).trim() !== '' &&
+                    safeNumber(
+                        row.jumlahPerUnit,
+                        0
+                    ) > 0
+            )
+            .map(
+                row => ({
+
+                    jenisProduk:
+                        safeString(
+                            row.jenisProduk
+                        ).trim(),
+
+                    jumlahPerUnit:
+                        safeNumber(
+                            row.jumlahPerUnit,
+                            1
+                        )
+
+                })
+            );
+
+
+    bahan.nama =
+        nama;
+
+    bahan.satuan =
+        satuan;
+
+    bahan.resepKonversi =
+        resepValid;
+
+
+    saveJSON(
+        SK_BAHAN,
+        bahanBakuList
+    );
+
+
+    tempResep = [];
+
+
+    renderSemuaStock();
+
+    tutupModalForm();
+
+}
+
+
+// ============================================================
 // FORM STOK MASUK
 // ============================================================
 
@@ -2638,6 +2945,396 @@ function submitStokMasuk(
     renderSemuaStock();
 
     tutupModalForm();
+
+}
+
+
+// ============================================================
+// EDIT TRANSAKSI STOK MASUK / PENGEMBALIAN
+// ============================================================
+//
+// Dipakai untuk membetulkan transaksi yang sudah tercatat,
+// misalnya waktu input awal harga belum diketahui
+// dan mau diisi belakangan.
+//
+// Kalau jumlah diubah, saldo gudang disesuaikan
+// mengikuti selisihnya (delta), bukan ditimpa dari nol.
+// ============================================================
+
+function bukaModalEditTransaksiMasuk(
+    bahanBakuId,
+    transaksiId
+) {
+
+    const bahan =
+        getBahanById(
+            bahanBakuId
+        );
+
+
+    if (!bahan) {
+
+        alert(
+            'Bahan baku tidak ditemukan.'
+        );
+
+        return;
+
+    }
+
+
+    const transaksi =
+        stokMasukList.find(
+            row =>
+                String(
+                    row.id
+                ) ===
+                String(
+                    transaksiId
+                )
+        );
+
+
+    if (!transaksi) {
+
+        alert(
+            'Transaksi tidak ditemukan.'
+        );
+
+        return;
+
+    }
+
+
+    const isPengembalian =
+        transaksi.tipe ===
+            'pengembalian';
+
+
+    bukaModalForm(
+
+        isPengembalian
+            ? 'Edit Pengembalian'
+            : 'Edit Stok Masuk',
+
+        `
+
+            <p class="text-sm font-bold text-gray-800 mb-3">
+
+                ${escapeHTML(
+                    bahan.nama
+                )}
+
+                <span class="text-gray-400 font-normal">
+                    (${escapeHTML(
+                        bahan.satuan
+                    )})
+                </span>
+
+            </p>
+
+
+            <div class="mb-3">
+
+                <label class="text-xs font-bold text-gray-500">
+                    Jumlah
+                </label>
+
+                <input
+                    id="inputEditJumlahMasuk"
+                    type="number"
+                    min="0"
+                    value="${safeNumber(
+                        transaksi.jumlah,
+                        0
+                    )}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
+                >
+
+            </div>
+
+
+            <div class="mb-3">
+
+                <label class="text-xs font-bold text-gray-500">
+                    Tanggal
+                </label>
+
+                <input
+                    id="inputEditTanggalMasuk"
+                    type="date"
+                    value="${escapeHTML(
+                        transaksi.tanggal
+                    )}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
+                >
+
+            </div>
+
+
+            ${
+                !isPengembalian
+                    ? `
+
+                        <div class="mb-3">
+
+                            <label class="text-xs font-bold text-gray-500">
+                                Harga per ${escapeHTML(
+                                    bahan.satuan
+                                )}
+                            </label>
+
+                            <input
+                                id="inputEditHargaMasuk"
+                                type="number"
+                                min="0"
+                                value="${
+                                    safeNumber(
+                                        transaksi.harga,
+                                        0
+                                    ) || ''
+                                }"
+                                placeholder="Belum wajib diisi"
+                                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
+                            >
+
+                        </div>
+
+                    `
+                    : ''
+            }
+
+
+            <div class="mb-3">
+
+                <label class="text-xs font-bold text-gray-500">
+                    Catatan
+                </label>
+
+                <input
+                    id="inputEditCatatanMasuk"
+                    type="text"
+                    value="${escapeHTML(
+                        transaksi.catatan
+                    )}"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
+                >
+
+            </div>
+
+
+            <button
+                onclick="submitEditTransaksiMasuk('${escapeHTML(
+                    bahanBakuId
+                )}','${escapeHTML(
+                    transaksiId
+                )}')"
+                class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-2"
+            >
+                Simpan Perubahan
+            </button>
+
+        `
+    );
+
+}
+
+
+function submitEditTransaksiMasuk(
+    bahanBakuId,
+    transaksiId
+) {
+
+    const bahan =
+        getBahanById(
+            bahanBakuId
+        );
+
+
+    if (!bahan) {
+
+        alert(
+            'Bahan baku tidak ditemukan.'
+        );
+
+        return;
+
+    }
+
+
+    const transaksi =
+        stokMasukList.find(
+            row =>
+                String(
+                    row.id
+                ) ===
+                String(
+                    transaksiId
+                )
+        );
+
+
+    if (!transaksi) {
+
+        alert(
+            'Transaksi tidak ditemukan.'
+        );
+
+        return;
+
+    }
+
+
+    const jumlahEl =
+        getElement(
+            'inputEditJumlahMasuk'
+        );
+
+
+    const tanggalEl =
+        getElement(
+            'inputEditTanggalMasuk'
+        );
+
+
+    const hargaEl =
+        getElement(
+            'inputEditHargaMasuk'
+        );
+
+
+    const catatanEl =
+        getElement(
+            'inputEditCatatanMasuk'
+        );
+
+
+    const jumlahBaru =
+        Math.floor(
+            safeNumber(
+                jumlahEl
+                    ? jumlahEl.value
+                    : 0,
+                0
+            )
+        );
+
+
+    const tanggalBaru =
+        tanggalEl &&
+        tanggalEl.value
+            ? tanggalEl.value
+            : transaksi.tanggal;
+
+
+    const catatanBaru =
+        catatanEl
+            ? safeString(
+                catatanEl.value
+            ).trim()
+            : '';
+
+
+    if (
+        jumlahBaru <= 0
+    ) {
+
+        alert(
+            'Jumlah harus diisi dan lebih dari 0.'
+        );
+
+        return;
+
+    }
+
+
+    // ========================================================
+    // SESUAIKAN SALDO GUDANG BERDASARKAN SELISIH JUMLAH
+    // ========================================================
+
+    const jumlahLama =
+        Math.max(
+            0,
+            safeNumber(
+                transaksi.jumlah,
+                0
+            )
+        );
+
+
+    const delta =
+        jumlahBaru -
+        jumlahLama;
+
+
+    if (
+        delta > 0
+    ) {
+
+        tambahSaldoGudang(
+            bahanBakuId,
+            delta
+        );
+
+    } else if (
+        delta < 0
+    ) {
+
+        kurangiSaldoGudang(
+            bahanBakuId,
+            Math.abs(
+                delta
+            )
+        );
+
+    }
+
+
+    transaksi.jumlah =
+        jumlahBaru;
+
+    transaksi.tanggal =
+        tanggalBaru;
+
+    transaksi.catatan =
+        catatanBaru;
+
+
+    if (
+        transaksi.tipe !==
+            'pengembalian'
+    ) {
+
+        const hargaBaru =
+            hargaEl
+                ? Math.max(
+                    0,
+                    safeNumber(
+                        hargaEl.value,
+                        0
+                    )
+                )
+                : 0;
+
+
+        transaksi.harga =
+            hargaBaru;
+
+    }
+
+
+    saveJSON(
+        SK_MASUK,
+        stokMasukList
+    );
+
+
+    refreshModalRiwayatBahan(
+        bahanBakuId
+    );
+
+
+    renderSemuaStock();
 
 }
 
@@ -4258,18 +4955,47 @@ function buildRiwayatBahanHtml(
                         </div>
 
 
-                        <button
-                            onclick="hapusTransaksiBahan('${escapeHTML(
-                                bahanBakuId
-                            )}','${escapeHTML(
-                                transaction.riwayatTipe
-                            )}','${escapeHTML(
-                                transaction.id
-                            )}')"
-                            class="text-red-500 font-bold text-xs px-2"
-                        >
-                            Hapus
-                        </button>
+                        <div class="flex items-center gap-1 shrink-0">
+
+                            ${
+                                (
+                                    transaction.riwayatTipe ===
+                                        'masuk' ||
+                                    transaction.riwayatTipe ===
+                                        'pengembalian'
+                                )
+                                    ? `
+
+                                        <button
+                                            onclick="bukaModalEditTransaksiMasuk('${escapeHTML(
+                                                bahanBakuId
+                                            )}','${escapeHTML(
+                                                transaction.id
+                                            )}')"
+                                            class="text-blue-500 font-bold text-xs px-2"
+                                        >
+                                            Edit
+                                        </button>
+
+                                    `
+                                    : ''
+                            }
+
+
+                            <button
+                                onclick="hapusTransaksiBahan('${escapeHTML(
+                                    bahanBakuId
+                                )}','${escapeHTML(
+                                    transaction.riwayatTipe
+                                )}','${escapeHTML(
+                                    transaction.id
+                                )}')"
+                                class="text-red-500 font-bold text-xs px-2"
+                            >
+                                Hapus
+                            </button>
+
+                        </div>
 
                     </div>
 
@@ -4564,6 +5290,17 @@ function renderBahanBakuList() {
 
 
                                 <div class="flex items-center gap-1 shrink-0">
+
+                                    <button
+                                        onclick="bukaModalEditBahan('${escapeHTML(
+                                            bahan.id
+                                        )}')"
+                                        title="Edit"
+                                        class="w-7 h-7 flex items-center justify-center bg-blue-50 rounded-full text-blue-500 text-xs"
+                                    >
+                                        ✏️
+                                    </button>
+
 
                                     <button
                                         onclick="bukaModalRiwayatBahan('${escapeHTML(
@@ -7009,11 +7746,26 @@ window.renderFormBahanBaku =
 window.submitTambahBahan =
     submitTambahBahan;
 
+window.bukaModalEditBahan =
+    bukaModalEditBahan;
+
+window.renderFormEditBahan =
+    renderFormEditBahan;
+
+window.submitEditBahan =
+    submitEditBahan;
+
 window.bukaModalStokMasuk =
     bukaModalStokMasuk;
 
 window.submitStokMasuk =
     submitStokMasuk;
+
+window.bukaModalEditTransaksiMasuk =
+    bukaModalEditTransaksiMasuk;
+
+window.submitEditTransaksiMasuk =
+    submitEditTransaksiMasuk;
 
 window.bukaModalStokKeluar =
     bukaModalStokKeluar;
