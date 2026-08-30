@@ -1,8139 +1,969 @@
-// ============================================================
-// STOCK.JS - MONITORING & REKONSILIASI STOK AYAM BOBBY
-// FULL VERSION
-//
-// SISTEM:
-// 1. MASTER BAHAN BAKU = PERMANEN
-// 2. SALDO GUDANG = PERMANEN / CARRY OVER
-// 3. TRANSAKSI HARIAN = MASUK, KELUAR, MASAK, KEMBALI
-// 4. RESET = ARSIP + HAPUS TRANSAKSI HARI INI
-// 5. SALDO GUDANG TIDAK DIHAPUS SAAT RESET
-// 6. PENGEMBALIAN OTOMATIS MENGIKUTI BAHAN BAKU
-// ============================================================
+// ==============================================================
+// HALAMAN STOCK - Monitoring & Rekonsiliasi Stok
+// Alur: Stok Masuk / Retur -> Stok Keluar (ke lapangan) -> Stok Masak
+//       (jadi jenis produk siap jual) -> Rekonsiliasi vs Penjualan Kasir
+// Semua data di sini (kecuali definisi Bahan Baku) direset & diarsipkan
+// bareng tombol "Reset Hari Ini" di halaman Kasir.
+// ==============================================================
 
+const SK_BAHAN = 'bobby_bahan_baku';
+const SK_MASUK = 'bobby_stok_masuk';
+const SK_KELUAR = 'bobby_stok_keluar';
+const SK_MASAK = 'bobby_stok_masak';
+const SK_RETUR = 'bobby_stok_retur';
+const SK_MAPPING = 'bobby_produk_mapping';
+const SK_SISA_FISIK = 'bobby_sisa_fisik';
+const SK_STOCK_ARCHIVE = 'bobby_stock_archive';
 
-// ============================================================
-// STORAGE KEY
-// ============================================================
-
-const SK_BAHAN =
-    'bobby_bahan_baku';
-
-const SK_MASUK =
-    'bobby_stok_masuk';
-
-const SK_KELUAR =
-    'bobby_stok_keluar';
-
-const SK_MASAK =
-    'bobby_stok_masak';
-
-const SK_MAPPING =
-    'bobby_produk_mapping';
-
-const SK_SISA_FISIK =
-    'bobby_sisa_fisik';
-
-const SK_SALDO_GUDANG =
-    'bobby_saldo_gudang';
-
-
-// ============================================================
-// HELPER
-// ============================================================
-
-function safeNumber(
-    value,
-    fallback = 0
-) {
-
-    const n =
-        Number(value);
-
-    return Number.isFinite(n)
-        ? n
-        : fallback;
-
-}
-
-
-function safeString(
-    value,
-    fallback = ''
-) {
-
-    if (
-        value === null ||
-        value === undefined
-    ) {
-
-        return fallback;
-
-    }
-
-    return String(value);
-
-}
-
-
-function loadJSON(
-    key,
-    fallback
-) {
-
+function loadJSON(key, fallback) {
     try {
-
-        const raw =
-            localStorage.getItem(
-                key
-            );
-
-        if (
-            raw === null ||
-            raw === ''
-        ) {
-
-            return fallback;
-
-        }
-
-        const parsed =
-            JSON.parse(raw);
-
-        return (
-            parsed === null ||
-            parsed === undefined
-        )
-            ? fallback
-            : parsed;
-
-    } catch (error) {
-
-        console.warn(
-            `[STOCK] Gagal membaca ${key}:`,
-            error
-        );
-
+        const v = JSON.parse(localStorage.getItem(key));
+        return v === null || v === undefined ? fallback : v;
+    } catch (e) {
         return fallback;
-
     }
-
 }
 
+function saveJSON(key, val) {
+    localStorage.setItem(key, JSON.stringify(val));
+}
 
-function saveJSON(
-    key,
-    value
-) {
+let bahanBakuList = loadJSON(SK_BAHAN, []);       // [{id, nama, satuan, resepKonversi:[{jenisProduk, jumlahPerUnit}]}]  -- TIDAK direset harian
+let stokMasukList = loadJSON(SK_MASUK, []);       // [{id, bahanBakuId, jumlah, tanggal, harga, catatan, timestamp}]
+let stokKeluarList = loadJSON(SK_KELUAR, []);     // [{id, bahanBakuId, jumlah, tanggal, catatan, timestamp}]
+let stokMasakList = loadJSON(SK_MASAK, []);       // [{id, bahanBakuId, jumlahDiproses, tanggal, timestamp, hasil:[{jenisProduk, jumlah}]}]
+let stokReturList = loadJSON(SK_RETUR, []);       // [{id, bahanBakuId, jumlah, tanggal, catatan, timestamp}]
+let produkMapping = loadJSON(SK_MAPPING, {});     // { menuItemId: [ {jenisProduk, jumlahPerPorsi}, ... ] }
+let sisaFisikSaatIni = loadJSON(SK_SISA_FISIK, {}); // { jenisProduk: qty } -- periode berjalan (sejak reset terakhir)
+let stockArchiveList = loadJSON(SK_STOCK_ARCHIVE, []); // riwayat laporan stock per periode/hari
 
-    try {
-
-        localStorage.setItem(
-            key,
-            JSON.stringify(value)
-        );
-
-        return true;
-
-    } catch (error) {
-
-        console.error(
-            `[STOCK] Gagal menyimpan ${key}:`,
-            error
-        );
-
-        return false;
-
+// Normalisasi format lama mapping (single object) ke array
+Object.keys(produkMapping).forEach(k => {
+    if (produkMapping[k] && !Array.isArray(produkMapping[k])) {
+        produkMapping[k] = [produkMapping[k]];
     }
+});
 
-}
-
-
-function getElement(
-    id
-) {
-
-    return document.getElementById(
-        id
-    );
-
-}
-
-
-function escapeHTML(
-    value
-) {
-
-    return safeString(
-        value
-    )
-        .replace(
-            /&/g,
-            '&amp;'
-        )
-        .replace(
-            /</g,
-            '&lt;'
-        )
-        .replace(
-            />/g,
-            '&gt;'
-        )
-        .replace(
-            /"/g,
-            '&quot;'
-        )
-        .replace(
-            /'/g,
-            '&#039;'
-        );
-
-}
-
-
-// ============================================================
-// TANGGAL
-// ============================================================
+let tempResep = []; // dipakai sementara pas isi form tambah/edit bahan baku
+let tempNamaBahan = '';
+let tempSatuanBahan = '';
+let editingBahanBakuId = null; // null = mode tambah baru, isi id = mode edit
 
 function todayKey() {
-
-    const d =
-        new Date();
-
-    const year =
-        d.getFullYear();
-
-    const month =
-        String(
-            d.getMonth() + 1
-        ).padStart(
-            2,
-            '0'
-        );
-
-    const day =
-        String(
-            d.getDate()
-        ).padStart(
-            2,
-            '0'
-        );
-
-    return `${year}-${month}-${day}`;
-
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
 }
 
-
-function formatTanggalIndonesia(
-    tanggal
-) {
-
-    if (!tanggal) {
-
-        return '-';
-
-    }
-
-    const d =
-        new Date(
-            `${tanggal}T00:00:00`
-        );
-
-    if (
-        Number.isNaN(
-            d.getTime()
-        )
-    ) {
-
-        return tanggal;
-
-    }
-
-    return d.toLocaleDateString(
-        'id-ID',
-        {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        }
-    );
-
+// ==============================
+// PERHITUNGAN STOK (selalu dari data periode berjalan / belum direset)
+// ==============================
+function hitungStokUtama(bahanBakuId) {
+    const masuk = stokMasukList.filter(x => x.bahanBakuId === bahanBakuId).reduce((s, x) => s + x.jumlah, 0);
+    const retur = stokReturList.filter(x => x.bahanBakuId === bahanBakuId).reduce((s, x) => s + x.jumlah, 0);
+    const keluar = stokKeluarList.filter(x => x.bahanBakuId === bahanBakuId).reduce((s, x) => s + x.jumlah, 0);
+    return masuk + retur - keluar;
 }
 
-
-// ============================================================
-// DATA
-// ============================================================
-
-let bahanBakuList =
-    loadJSON(
-        SK_BAHAN,
-        []
-    );
-
-let stokMasukList =
-    loadJSON(
-        SK_MASUK,
-        []
-    );
-
-let stokKeluarList =
-    loadJSON(
-        SK_KELUAR,
-        []
-    );
-
-let stokMasakList =
-    loadJSON(
-        SK_MASAK,
-        []
-    );
-
-let produkMapping =
-    loadJSON(
-        SK_MAPPING,
-        {}
-    );
-
-let sisaFisikHarian =
-    loadJSON(
-        SK_SISA_FISIK,
-        {}
-    );
-
-let saldoGudang =
-    loadJSON(
-        SK_SALDO_GUDANG,
-        null
-    );
-
-let tempResep = [];
-
-
-// ============================================================
-// VALIDASI DATA
-// ============================================================
-
-if (
-    !Array.isArray(
-        bahanBakuList
-    )
-) {
-
-    bahanBakuList = [];
-
+function hitungStokLapanganMentah(bahanBakuId) {
+    const keluar = stokKeluarList.filter(x => x.bahanBakuId === bahanBakuId).reduce((s, x) => s + x.jumlah, 0);
+    const retur = stokReturList.filter(x => x.bahanBakuId === bahanBakuId).reduce((s, x) => s + x.jumlah, 0);
+    const dimasak = stokMasakList.filter(x => x.bahanBakuId === bahanBakuId).reduce((s, x) => s + x.jumlahDiproses, 0);
+    return keluar - retur - dimasak;
 }
-
-
-if (
-    !Array.isArray(
-        stokMasukList
-    )
-) {
-
-    stokMasukList = [];
-
-}
-
-
-if (
-    !Array.isArray(
-        stokKeluarList
-    )
-) {
-
-    stokKeluarList = [];
-
-}
-
-
-if (
-    !Array.isArray(
-        stokMasakList
-    )
-) {
-
-    stokMasakList = [];
-
-}
-
-
-if (
-    typeof produkMapping !==
-        'object' ||
-    produkMapping === null ||
-    Array.isArray(
-        produkMapping
-    )
-) {
-
-    produkMapping = {};
-
-}
-
-
-if (
-    typeof sisaFisikHarian !==
-        'object' ||
-    sisaFisikHarian === null ||
-    Array.isArray(
-        sisaFisikHarian
-    )
-) {
-
-    sisaFisikHarian = {};
-
-}
-
-
-// ============================================================
-// NORMALISASI MAPPING LAMA
-// ============================================================
-
-Object.keys(
-    produkMapping
-).forEach(
-    key => {
-
-        if (
-            produkMapping[key] &&
-            !Array.isArray(
-                produkMapping[key]
-            )
-        ) {
-
-            produkMapping[key] = [
-                produkMapping[key]
-            ];
-
-        }
-
-    }
-);
-
-
-// ============================================================
-// NORMALISASI BAHAN
-// ============================================================
-
-bahanBakuList =
-    bahanBakuList
-        .filter(
-            bahan =>
-                bahan &&
-                typeof bahan ===
-                    'object'
-        )
-        .map(
-            bahan => ({
-
-                ...bahan,
-
-                id:
-                    safeString(
-                        bahan.id
-                    ),
-
-                nama:
-                    safeString(
-                        bahan.nama,
-                        'Bahan'
-                    ),
-
-                satuan:
-                    safeString(
-                        bahan.satuan,
-                        'unit'
-                    ),
-
-                resepKonversi:
-                    Array.isArray(
-                        bahan.resepKonversi
-                    )
-                        ? bahan.resepKonversi
-                            .filter(
-                                row =>
-                                    row &&
-                                    typeof row ===
-                                        'object'
-                            )
-                            .map(
-                                row => ({
-
-                                    ...row,
-
-                                    jenisProduk:
-                                        safeString(
-                                            row.jenisProduk
-                                        ).trim(),
-
-                                    jumlahPerUnit:
-                                        Math.max(
-                                            0,
-                                            safeNumber(
-                                                row.jumlahPerUnit,
-                                                0
-                                            )
-                                        )
-
-                                })
-                            )
-                        : []
-
-            })
-        );
-
-
-// ============================================================
-// NORMALISASI TRANSAKSI
-// ============================================================
-
-function normalizeTransaction(
-    transaction
-) {
-
-    if (
-        !transaction ||
-        typeof transaction !==
-            'object'
-    ) {
-
-        return null;
-
-    }
-
-    return {
-
-        ...transaction,
-
-        id:
-            safeString(
-                transaction.id,
-                'trx_' +
-                Date.now() +
-                '_' +
-                Math.random()
-        ),
-
-        bahanBakuId:
-            safeString(
-                transaction.bahanBakuId
-            ),
-
-        jumlah:
-            Math.max(
-                0,
-                safeNumber(
-                    transaction.jumlah,
-                    0
-                )
-            ),
-
-        jumlahDiproses:
-            Math.max(
-                0,
-                safeNumber(
-                    transaction.jumlahDiproses,
-                    0
-                )
-            ),
-
-        harga:
-            Math.max(
-                0,
-                safeNumber(
-                    transaction.harga,
-                    0
-                )
-            ),
-
-        tanggal:
-            safeString(
-                transaction.tanggal,
-                todayKey()
-            ),
-
-        catatan:
-            safeString(
-                transaction.catatan
-            ),
-
-        tipe:
-            safeString(
-                transaction.tipe
-            ),
-
-        timestamp:
-            safeString(
-                transaction.timestamp,
-                new Date().toISOString()
-            )
-
-    };
-
-}
-
-
-stokMasukList =
-    stokMasukList
-        .map(
-            normalizeTransaction
-        )
-        .filter(Boolean);
-
-
-stokKeluarList =
-    stokKeluarList
-        .map(
-            normalizeTransaction
-        )
-        .filter(Boolean);
-
-
-stokMasakList =
-    stokMasakList
-        .map(
-            normalizeTransaction
-        )
-        .filter(Boolean);
-
-
-// ============================================================
-// SALDO GUDANG
-// ============================================================
-//
-// PENTING:
-//
-// Kalau storage saldo belum pernah ada,
-// sistem menghitung saldo awal dari transaksi lama:
-//
-// SEMUA MASUK - SEMUA KELUAR
-//
-// Setelah itu saldo disimpan permanen.
-// Jadi ke depannya reset TIDAK menghapus saldo.
-// ============================================================
-
-function initializeSaldoGudang() {
-
-    if (
-        saldoGudang &&
-        typeof saldoGudang ===
-            'object' &&
-        !Array.isArray(
-            saldoGudang
-        )
-    ) {
-
-        return;
-
-    }
-
-
-    saldoGudang = {};
-
-
-    bahanBakuList.forEach(
-        bahan => {
-
-            let total =
-                0;
-
-
-            stokMasukList
-                .filter(
-                    transaction =>
-                        String(
-                            transaction.bahanBakuId
-                        ) ===
-                        String(
-                            bahan.id
-                        )
-                )
-                .forEach(
-                    transaction => {
-
-                        total +=
-                            Math.max(
-                                0,
-                                safeNumber(
-                                    transaction.jumlah,
-                                    0
-                                )
-                            );
-
-                    }
-                );
-
-
-            stokKeluarList
-                .filter(
-                    transaction =>
-                        String(
-                            transaction.bahanBakuId
-                        ) ===
-                        String(
-                            bahan.id
-                        )
-                )
-                .forEach(
-                    transaction => {
-
-                        total -=
-                            Math.max(
-                                0,
-                                safeNumber(
-                                    transaction.jumlah,
-                                    0
-                                )
-                            );
-
-                    }
-                );
-
-
-            saldoGudang[
-                bahan.id
-            ] =
-                Math.max(
-                    0,
-                    total
-                );
-
-        }
-    );
-
-
-    saveJSON(
-        SK_SALDO_GUDANG,
-        saldoGudang
-    );
-
-}
-
-
-initializeSaldoGudang();
-
-
-// ============================================================
-// PASTIKAN BAHAN BARU PUNYA SALDO
-// ============================================================
-
-function ensureSaldoBahan(
-    bahanBakuId
-) {
-
-    if (
-        !saldoGudang ||
-        typeof saldoGudang !==
-            'object'
-    ) {
-
-        saldoGudang = {};
-
-    }
-
-
-    const id =
-        String(
-            bahanBakuId
-        );
-
-
-    if (
-        saldoGudang[id] ===
-            undefined ||
-        saldoGudang[id] ===
-            null ||
-        !Number.isFinite(
-            Number(
-                saldoGudang[id]
-            )
-        )
-    ) {
-
-        saldoGudang[id] =
-            0;
-
-    }
-
-}
-
-
-function simpanSaldoGudang() {
-
-    saveJSON(
-        SK_SALDO_GUDANG,
-        saldoGudang
-    );
-
-}
-
-
-function getSaldoGudang(
-    bahanBakuId
-) {
-
-    ensureSaldoBahan(
-        bahanBakuId
-    );
-
-
-    return Math.max(
-        0,
-        safeNumber(
-            saldoGudang[
-                String(
-                    bahanBakuId
-                )
-            ],
-            0
-        )
-    );
-
-}
-
-
-function tambahSaldoGudang(
-    bahanBakuId,
-    jumlah
-) {
-
-    ensureSaldoBahan(
-        bahanBakuId
-    );
-
-
-    const id =
-        String(
-            bahanBakuId
-        );
-
-
-    saldoGudang[id] =
-        Math.max(
-            0,
-            getSaldoGudang(
-                bahanBakuId
-            ) +
-            safeNumber(
-                jumlah,
-                0
-            )
-        );
-
-
-    simpanSaldoGudang();
-
-}
-
-
-function kurangiSaldoGudang(
-    bahanBakuId,
-    jumlah
-) {
-
-    ensureSaldoBahan(
-        bahanBakuId
-    );
-
-
-    const id =
-        String(
-            bahanBakuId
-        );
-
-
-    saldoGudang[id] =
-        Math.max(
-            0,
-            getSaldoGudang(
-                bahanBakuId
-            ) -
-            safeNumber(
-                jumlah,
-                0
-            )
-        );
-
-
-    simpanSaldoGudang();
-
-}
-
-
-// ============================================================
-// TAMBAH SALDO UNTUK BAHAN YANG BARU DITAMBAHKAN
-// ============================================================
-
-bahanBakuList.forEach(
-    bahan => {
-
-        ensureSaldoBahan(
-            bahan.id
-        );
-
-    }
-);
-
-simpanSaldoGudang();
-
-
-// ============================================================
-// CARI BAHAN
-// ============================================================
-
-function getBahanById(
-    bahanBakuId
-) {
-
-    return bahanBakuList.find(
-        bahan =>
-            String(
-                bahan.id
-            ) ===
-            String(
-                bahanBakuId
-            )
-    );
-
-}
-
-
-// ============================================================
-// TRANSAKSI BERDASARKAN TANGGAL
-// ============================================================
-
-function transaksiTanggal(
-    transaction
-) {
-
-    return safeString(
-        transaction?.tanggal
-    );
-
-}
-
-
-function getTransaksiMasukTanggal(
-    tanggal = todayKey()
-) {
-
-    return stokMasukList.filter(
-        transaction =>
-            transaksiTanggal(
-                transaction
-            ) ===
-            tanggal
-    );
-
-}
-
-
-function getTransaksiKeluarTanggal(
-    tanggal = todayKey()
-) {
-
-    return stokKeluarList.filter(
-        transaction =>
-            transaksiTanggal(
-                transaction
-            ) ===
-            tanggal
-    );
-
-}
-
-
-function getTransaksiMasakTanggal(
-    tanggal = todayKey()
-) {
-
-    return stokMasakList.filter(
-        transaction =>
-            transaksiTanggal(
-                transaction
-            ) ===
-            tanggal
-    );
-
-}
-
-
-// ============================================================
-// PERHITUNGAN TRANSAKSI BAHAN
-// ============================================================
-
-function hitungPembelian(
-    bahanBakuId,
-    tanggal = todayKey()
-) {
-
-    return stokMasukList
-        .filter(
-            transaction =>
-                String(
-                    transaction.bahanBakuId
-                ) ===
-                String(
-                    bahanBakuId
-                ) &&
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal &&
-                transaction.tipe !==
-                    'pengembalian'
-        )
-        .reduce(
-            (
-                total,
-                transaction
-            ) =>
-                total +
-                Math.max(
-                    0,
-                    safeNumber(
-                        transaction.jumlah,
-                        0
-                    )
-                ),
-            0
-        );
-
-}
-
-
-function hitungPengembalian(
-    bahanBakuId,
-    tanggal = todayKey()
-) {
-
-    return stokMasukList
-        .filter(
-            transaction =>
-                String(
-                    transaction.bahanBakuId
-                ) ===
-                String(
-                    bahanBakuId
-                ) &&
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal &&
-                transaction.tipe ===
-                    'pengembalian'
-        )
-        .reduce(
-            (
-                total,
-                transaction
-            ) =>
-                total +
-                Math.max(
-                    0,
-                    safeNumber(
-                        transaction.jumlah,
-                        0
-                    )
-                ),
-            0
-        );
-
-}
-
-
-function hitungKeluar(
-    bahanBakuId,
-    tanggal = todayKey()
-) {
-
-    return stokKeluarList
-        .filter(
-            transaction =>
-                String(
-                    transaction.bahanBakuId
-                ) ===
-                String(
-                    bahanBakuId
-                ) &&
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal
-        )
-        .reduce(
-            (
-                total,
-                transaction
-            ) =>
-                total +
-                Math.max(
-                    0,
-                    safeNumber(
-                        transaction.jumlah,
-                        0
-                    )
-                ),
-            0
-        );
-
-}
-
-
-function hitungMasakBahan(
-    bahanBakuId,
-    tanggal = todayKey()
-) {
-
-    return stokMasakList
-        .filter(
-            transaction =>
-                String(
-                    transaction.bahanBakuId
-                ) ===
-                String(
-                    bahanBakuId
-                ) &&
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal
-        )
-        .reduce(
-            (
-                total,
-                transaction
-            ) =>
-                total +
-                Math.max(
-                    0,
-                    safeNumber(
-                        transaction.jumlahDiproses,
-                        0
-                    )
-                ),
-            0
-        );
-
-}
-
-
-// ============================================================
-// STOK GUDANG
-// ============================================================
-//
-// SEKARANG BUKAN HASIL PERHITUNGAN TRANSAKSI HARI INI.
-//
-// Stok Gudang = saldo permanen.
-//
-// RESET TIDAK MENGUBAH NILAI INI.
-// ============================================================
-
-function hitungStokUtama(
-    bahanBakuId
-) {
-
-    return getSaldoGudang(
-        bahanBakuId
-    );
-
-}
-
-
-// ============================================================
-// STOK LAPANGAN HARI INI
-// ============================================================
-//
-// KELUAR HARI INI
-// - MASAK HARI INI
-// - KEMBALI HARI INI
-//
-// ============================================================
-
-function hitungStokLapanganMentah(
-    bahanBakuId,
-    tanggal = todayKey()
-) {
-
-    const keluar =
-        hitungKeluar(
-            bahanBakuId,
-            tanggal
-        );
-
-
-    const masak =
-        hitungMasakBahan(
-            bahanBakuId,
-            tanggal
-        );
-
-
-    const kembali =
-        hitungPengembalian(
-            bahanBakuId,
-            tanggal
-        );
-
-
-    return Math.max(
-        0,
-        keluar -
-        masak -
-        kembali
-    );
-
-}
-
-
-// ============================================================
-// JENIS PRODUK
-// ============================================================
 
 function getJenisProdukList() {
-
-    const set =
-        new Set();
-
-
-    bahanBakuList.forEach(
-        bahan => {
-
-            const resep =
-                Array.isArray(
-                    bahan.resepKonversi
-                )
-                    ? bahan.resepKonversi
-                    : [];
-
-
-            resep.forEach(
-                row => {
-
-                    const jenis =
-                        safeString(
-                            row.jenisProduk
-                        ).trim();
-
-
-                    if (jenis) {
-
-                        set.add(
-                            jenis
-                        );
-
-                    }
-
-                }
-            );
-
-        }
-    );
-
-
-    return Array.from(
-        set
-    );
-
+    const set = new Set();
+    bahanBakuList.forEach(b => (b.resepKonversi || []).forEach(r => set.add(r.jenisProduk)));
+    return Array.from(set);
 }
 
-
-// ============================================================
-// STOK HASIL MASAK
-// ============================================================
-
-function getStokMasakHariIni(
-    jenisProduk,
-    tanggal = todayKey()
-) {
-
-    let total =
-        0;
-
-
-    stokMasakList
-        .filter(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal
-        )
-        .forEach(
-            transaction => {
-
-                const hasil =
-                    Array.isArray(
-                        transaction.hasil
-                    )
-                        ? transaction.hasil
-                        : [];
-
-
-                hasil.forEach(
-                    row => {
-
-                        if (
-                            safeString(
-                                row.jenisProduk
-                            ) ===
-                            jenisProduk
-                        ) {
-
-                            total +=
-                                Math.max(
-                                    0,
-                                    safeNumber(
-                                        row.jumlah,
-                                        0
-                                    )
-                                );
-
-                        }
-
-                    }
-                );
-
-            }
-        );
-
-
-    return total;
-
-}
-
-
-// ============================================================
-// PENJUALAN
-// ============================================================
-
-function getPenjualanTercatat(
-    jenisProduk
-) {
-
-    let total =
-        0;
-
-
-    try {
-
-        if (
-            typeof state ===
-                'undefined' ||
-            !state ||
-            !state.items
-        ) {
-
-            return 0;
-
-        }
-
-
-        if (
-            typeof menuData ===
-                'undefined' ||
-            !Array.isArray(
-                menuData
-            )
-        ) {
-
-            return 0;
-
-        }
-
-
-        Object.keys(
-            state.items
-        ).forEach(
-            menuId => {
-
-                const qty =
-                    Math.max(
-                        0,
-                        safeNumber(
-                            state.items[
-                                menuId
-                            ],
-                            0
-                        )
-                    );
-
-
-                if (
-                    qty <= 0
-                ) {
-
-                    return;
-
-                }
-
-
-                const mappingRows =
-                    Array.isArray(
-                        produkMapping[
-                            menuId
-                        ]
-                    )
-                        ? produkMapping[
-                            menuId
-                        ]
-                        : [];
-
-
-                mappingRows.forEach(
-                    row => {
-
-                        if (
-                            safeString(
-                                row.jenisProduk
-                            ) !==
-                            jenisProduk
-                        ) {
-
-                            return;
-
-                        }
-
-
-                        const perPorsi =
-                            Math.max(
-                                0,
-                                safeNumber(
-                                    row.jumlahPerPorsi,
-                                    1
-                                )
-                            );
-
-
-                        total +=
-                            qty *
-                            perPorsi;
-
-                    }
-                );
-
-            }
-        );
-
-    } catch (error) {
-
-        console.error(
-            '[STOCK] Gagal membaca penjualan:',
-            error
-        );
-
-    }
-
-
-    return total;
-
-}
-
-
-// ============================================================
-// SISA FISIK
-// ============================================================
-
-function getSisaFisik(
-    jenisProduk,
-    tanggal = todayKey()
-) {
-
-    if (
-        !sisaFisikHarian[
-            tanggal
-        ]
-    ) {
-
-        return '';
-
-    }
-
-
-    const value =
-        sisaFisikHarian[
-            tanggal
-        ][
-            jenisProduk
-        ];
-
-
-    if (
-        value === undefined ||
-        value === null ||
-        value === ''
-    ) {
-
-        return '';
-
-    }
-
-
-    return Math.max(
-        0,
-        safeNumber(
-            value,
-            0
-        )
-    );
-
-}
-
-
-function simpanSisaFisik(
-    jenisProduk,
-    jumlah,
-    tanggal = todayKey()
-) {
-
-    if (
-        !sisaFisikHarian[
-            tanggal
-        ]
-    ) {
-
-        sisaFisikHarian[
-            tanggal
-        ] = {};
-
-    }
-
-
-    if (
-        jumlah === '' ||
-        jumlah === null ||
-        jumlah === undefined
-    ) {
-
-        delete sisaFisikHarian[
-            tanggal
-        ][
-            jenisProduk
-        ];
-
-    } else {
-
-        sisaFisikHarian[
-            tanggal
-        ][
-            jenisProduk
-        ] =
-            Math.max(
-                0,
-                safeNumber(
-                    jumlah,
-                    0
-                )
-            );
-
-    }
-
-
-    saveJSON(
-        SK_SISA_FISIK,
-        sisaFisikHarian
-    );
-
-}
-
-
-function ubahSisaFisik(
-    jenisProduk,
-    jumlah
-) {
-
-    simpanSisaFisik(
-        jenisProduk,
-        jumlah
-    );
-
-
-    renderRekonsiliasi();
-
-}
-
-
-// ============================================================
-// JUMLAH PENGELUARAN BAHAN HARI INI
-// ============================================================
-
-function hitungPengeluaranHariIni() {
-
-    return stokMasukList
-        .filter(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) ===
-                todayKey() &&
-                transaction.tipe !==
-                    'pengembalian'
-        )
-        .reduce(
-            (
-                total,
-                transaction
-            ) => {
-
-                const jumlah =
-                    Math.max(
-                        0,
-                        safeNumber(
-                            transaction.jumlah,
-                            0
-                        )
-                    );
-
-
-                const harga =
-                    Math.max(
-                        0,
-                        safeNumber(
-                            transaction.harga,
-                            0
-                        )
-                    );
-
-
-                return total +
-                    (
-                        jumlah *
-                        harga
-                    );
-
-            },
-            0
-        );
-
-}
-
-
-// ============================================================
-// PEMASUKAN KASIR
-// ============================================================
-
-function hitungPemasukanHariIni() {
-
-    let total =
-        0;
-
-
-    try {
-
-        if (
-            typeof state ===
-                'undefined' ||
-            !state ||
-            !state.items
-        ) {
-
-            return 0;
-
-        }
-
-
-        if (
-            typeof menuData ===
-                'undefined' ||
-            !Array.isArray(
-                menuData
-            )
-        ) {
-
-            return 0;
-
-        }
-
-
-        Object.keys(
-            state.items
-        ).forEach(
-            menuId => {
-
-                const qty =
-                    Math.max(
-                        0,
-                        safeNumber(
-                            state.items[
-                                menuId
-                            ],
-                            0
-                        )
-                    );
-
-
-                if (
-                    qty <= 0
-                ) {
-
-                    return;
-
-                }
-
-
-                const menu =
-                    menuData.find(
-                        item =>
-                            String(
-                                item.id
-                            ) ===
-                            String(
-                                menuId
-                            )
-                    );
-
-
-                if (!menu) {
-
-                    return;
-
-                }
-
-
-                total +=
-                    qty *
-                    Math.max(
-                        0,
-                        safeNumber(
-                            menu.price,
-                            0
-                        )
-                    );
-
-            }
-        );
-
-    } catch (error) {
-
-        console.error(
-            '[STOCK] Gagal menghitung pemasukan:',
-            error
-        );
-
-    }
-
-
-    return total;
-
-}
-
-
-// ============================================================
-// TOTAL UANG
-// ============================================================
-
-function renderTotalPengeluaran() {
-
-    const el =
-        getElement(
-            'totalPengeluaranStock'
-        );
-
-
-    if (!el) {
-
-        return;
-
-    }
-
-
-    const pengeluaran =
-        hitungPengeluaranHariIni();
-
-
-    const pemasukan =
-        hitungPemasukanHariIni();
-
-
-    const selisih =
-        pemasukan -
-        pengeluaran;
-
-
-    const warna =
-        selisih >= 0
-            ? 'text-green-600'
-            : 'text-red-500';
-
-
-    el.innerHTML = `
-
-        <span class="text-gray-500">
-            Beli Bahan:
-            Rp ${pengeluaran.toLocaleString('id-ID')}
-        </span>
-
-        <br>
-
-        <span class="text-blue-500">
-            Hasil Jual:
-            Rp ${pemasukan.toLocaleString('id-ID')}
-        </span>
-
-        <br>
-
-        <span class="font-bold ${warna}">
-            Selisih:
-            Rp ${selisih.toLocaleString('id-ID')}
-        </span>
-
-    `;
-
-}
-
-
-// ============================================================
-// PENGEMBALIAN STOK DINAMIS
-// ============================================================
-
-function getJumlahDikembalikanHariIni(
-    bahanBakuId
-) {
-
-    return hitungPengembalian(
-        bahanBakuId,
-        todayKey()
-    );
-
-}
-
-
-function ubahStokDikembalikan(
-    bahanBakuId,
-    change
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        return;
-
-    }
-
-
-    const nilai =
-        Math.floor(
-            safeNumber(
-                change,
-                0
-            )
-        );
-
-
-    if (
-        nilai === 0
-    ) {
-
-        return;
-
-    }
-
-
-    const tanggal =
-        todayKey();
-
-
-    // ========================================================
-    // TAMBAH PENGEMBALIAN
-    // ========================================================
-
-    if (
-        nilai > 0
-    ) {
-
-        const lapangan =
-            hitungStokLapanganMentah(
-                bahanBakuId,
-                tanggal
-            );
-
-
-        if (
-            lapangan <= 0
-        ) {
-
-            alert(
-                `Tidak ada ${bahan.nama} di lapangan yang bisa dikembalikan.`
-            );
-
-            return;
-
-        }
-
-
-        const jumlah =
-            Math.min(
-                nilai,
-                lapangan
-            );
-
-
-        stokMasukList.push({
-
-            id:
-                'return_' +
-                Date.now() +
-                '_' +
-                Math.random()
-                    .toString(36)
-                    .slice(2),
-
-            bahanBakuId:
-                bahan.id,
-
-            jumlah,
-
-            tanggal,
-
-            harga:
-                0,
-
-            catatan:
-                `${bahan.nama} dikembalikan dari lapangan`,
-
-            tipe:
-                'pengembalian',
-
-            timestamp:
-                new Date().toISOString()
-
-        });
-
-
-        // Kembali ke gudang
-        tambahSaldoGudang(
-            bahanBakuId,
-            jumlah
-        );
-
-
-        saveJSON(
-            SK_MASUK,
-            stokMasukList
-        );
-
-
-        renderSemuaStock();
-
-        return;
-
-    }
-
-
-    // ========================================================
-    // KURANGI PENGEMBALIAN
-    // ========================================================
-
-    let sisa =
-        Math.min(
-            Math.abs(
-                nilai
-            ),
-            getJumlahDikembalikanHariIni(
-                bahanBakuId
-            )
-        );
-
-
-    if (
-        sisa <= 0
-    ) {
-
-        return;
-
-    }
-
-
-    for (
-        let i =
-            stokMasukList.length - 1;
-
-        i >= 0 &&
-        sisa > 0;
-
-        i--
-    ) {
-
-        const transaction =
-            stokMasukList[
-                i
-            ];
-
-
-        if (
-            transaction.tipe !==
-                'pengembalian'
-        ) {
-
-            continue;
-
-        }
-
-
-        if (
-            String(
-                transaction.bahanBakuId
-            ) !==
-            String(
-                bahanBakuId
-            )
-        ) {
-
-            continue;
-
-        }
-
-
-        if (
-            transaksiTanggal(
-                transaction
-            ) !==
-            tanggal
-        ) {
-
-            continue;
-
-        }
-
-
-        const jumlahTransaksi =
-            Math.max(
-                0,
-                safeNumber(
-                    transaction.jumlah,
-                    0
-                )
-            );
-
-
-        const ambil =
-            Math.min(
-                jumlahTransaksi,
-                sisa
-            );
-
-
-        transaction.jumlah =
-            jumlahTransaksi -
-            ambil;
-
-
-        // Batalkan saldo gudang
-        kurangiSaldoGudang(
-            bahanBakuId,
-            ambil
-        );
-
-
-        sisa -=
-            ambil;
-
-
-        if (
-            transaction.jumlah <=
-                0
-        ) {
-
-            stokMasukList.splice(
-                i,
-                1
-            );
-
-        }
-
-    }
-
-
-    saveJSON(
-        SK_MASUK,
-        stokMasukList
-    );
-
-
-    renderSemuaStock();
-
-}
-
-
-// ============================================================
-// TAMBAH BAHAN BAKU
-// ============================================================
-
-function tambahBahanBaku(
-    nama,
-    satuan,
-    resepKonversiArr
-) {
-
-    const namaClean =
-        safeString(
-            nama
-        ).trim();
-
-
-    const satuanClean =
-        safeString(
-            satuan
-        ).trim();
-
-
-    if (
-        !namaClean ||
-        !satuanClean
-    ) {
-
-        return false;
-
-    }
-
-
-    const id =
-        'bb_' +
-        Date.now() +
-        '_' +
-        Math.random()
-            .toString(36)
-            .slice(2);
-
-
-    bahanBakuList.push({
-
-        id,
-
-        nama:
-            namaClean,
-
-        satuan:
-            satuanClean,
-
-        resepKonversi:
-            Array.isArray(
-                resepKonversiArr
-            )
-                ? resepKonversiArr
-                    .filter(
-                        row =>
-                            row &&
-                            safeString(
-                                row.jenisProduk
-                            ).trim() !== '' &&
-                            safeNumber(
-                                row.jumlahPerUnit,
-                                0
-                            ) > 0
-                    )
-                    .map(
-                        row => ({
-
-                            jenisProduk:
-                                safeString(
-                                    row.jenisProduk
-                                ).trim(),
-
-                            jumlahPerUnit:
-                                safeNumber(
-                                    row.jumlahPerUnit,
-                                    1
-                                )
-
-                        })
-                    )
-                : []
-
+function getStokMasakSaatIni(jenisProduk) {
+    let total = 0;
+    stokMasakList.forEach(m => {
+        m.hasil.forEach(h => { if (h.jenisProduk === jenisProduk) total += h.jumlah; });
     });
+    return total;
+}
 
+function getPenjualanTercatat(jenisProduk) {
+    let total = 0;
+    if (typeof state !== 'undefined' && state && state.items) {
+        Object.keys(state.items).forEach(menuId => {
+            const rows = produkMapping[menuId] || [];
+            rows.forEach(row => {
+                if (row.jenisProduk === jenisProduk) {
+                    total += (state.items[menuId] || 0) * (row.jumlahPerPorsi || 1);
+                }
+            });
+        });
+    }
+    return total;
+}
 
-    // Bahan baru selalu mulai 0
-    saldoGudang[id] =
-        0;
+function getSisaFisik(jenisProduk) {
+    const val = sisaFisikSaatIni[jenisProduk];
+    return (val === undefined || val === null) ? '' : val;
+}
 
+function simpanSisaFisik(jenisProduk, jumlah) {
+    sisaFisikSaatIni[jenisProduk] = jumlah;
+    saveJSON(SK_SISA_FISIK, sisaFisikSaatIni);
+}
 
-    simpanSaldoGudang();
+function hitungPengeluaranSaatIni() {
+    return stokMasukList.reduce((s, x) => s + (x.jumlah * (x.harga || 0)), 0);
+}
 
+// ==============================
+// AKSI: BAHAN BAKU
+// ==============================
+function tambahBahanBaku(nama, satuan, resepKonversiArr) {
+    const id = 'bb_' + Date.now();
+    bahanBakuList.push({ id, nama, satuan, resepKonversi: resepKonversiArr || [] });
+    saveJSON(SK_BAHAN, bahanBakuList);
+    renderSemuaStock();
+}
 
-    saveJSON(
-        SK_BAHAN,
-        bahanBakuList
-    );
+function hapusBahanBaku(bahanBakuId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
 
+    if (!confirm(`Yakin mau hapus bahan baku "${bahan.nama}"? Semua riwayat stok masuk, keluar, retur, dan masak yang terkait bahan ini juga akan ikut terhapus. Tindakan ini gak bisa dibatalkan.`)) {
+        return;
+    }
+
+    bahanBakuList = bahanBakuList.filter(b => b.id !== bahanBakuId);
+    stokMasukList = stokMasukList.filter(x => x.bahanBakuId !== bahanBakuId);
+    stokKeluarList = stokKeluarList.filter(x => x.bahanBakuId !== bahanBakuId);
+    stokMasakList = stokMasakList.filter(x => x.bahanBakuId !== bahanBakuId);
+    stokReturList = stokReturList.filter(x => x.bahanBakuId !== bahanBakuId);
+
+    saveJSON(SK_BAHAN, bahanBakuList);
+    saveJSON(SK_MASUK, stokMasukList);
+    saveJSON(SK_KELUAR, stokKeluarList);
+    saveJSON(SK_MASAK, stokMasakList);
+    saveJSON(SK_RETUR, stokReturList);
 
     renderSemuaStock();
-
-    return true;
-
 }
 
-
-// ============================================================
-// FORM TAMBAH BAHAN
-// ============================================================
-
-function bukaModalTambahBahan() {
-
-    tempResep = [];
-
-    renderFormBahanBaku();
-
-}
-
-
-function renderFormBahanBaku() {
-
-    const rows =
-        tempResep
-            .map(
-                (
-                    row,
-                    index
-                ) => `
-
-                    <div class="flex gap-2 mb-2 items-center">
-
-                        <input
-                            type="text"
-                            value="${escapeHTML(row.jenisProduk)}"
-                            onchange="tempResep[${index}].jenisProduk=this.value"
-                            placeholder="Nama potongan"
-                            class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
-                        >
-
-                        <input
-                            type="number"
-                            min="0"
-                            value="${safeNumber(row.jumlahPerUnit, 1)}"
-                            onchange="tempResep[${index}].jumlahPerUnit=Number(this.value)"
-                            class="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
-                        >
-
-                        <button
-                            onclick="tempResep.splice(${index},1);renderFormBahanBaku()"
-                            class="text-red-500 font-bold px-2"
-                        >
-                            ✕
-                        </button>
-
-                    </div>
-
-                `
-            )
-            .join('');
-
-
-    bukaModalForm(
-
-        'Tambah Bahan Baku',
-
-        `
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Nama Bahan Baku
-                </label>
-
-                <input
-                    id="inputNamaBahan"
-                    type="text"
-                    placeholder="Contoh: Ayam"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Satuan
-                </label>
-
-                <input
-                    id="inputSatuanBahan"
-                    type="text"
-                    placeholder="Contoh: ekor / kg / liter"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Konversi Hasil Olahan
-                </label>
-
-                <p class="text-[11px] text-gray-400 mb-2">
-                    Contoh: 1 ekor ayam menghasilkan 4 dada dan 2 sayap.
-                </p>
-
-                ${rows}
-
-
-                <button
-                    onclick="tempResep.push({jenisProduk:'',jumlahPerUnit:1});renderFormBahanBaku()"
-                    class="text-xs font-bold text-red-600 mt-1"
-                >
-                    + Tambah Jenis Potongan
-                </button>
-
-            </div>
-
-
-            <button
-                onclick="submitTambahBahan()"
-                class="w-full bg-red-600 text-white font-bold py-3 rounded-xl mt-2"
-            >
-                Simpan Bahan Baku
-            </button>
-
-        `
-    );
-
-}
-
-
-function submitTambahBahan() {
-
-    const namaEl =
-        getElement(
-            'inputNamaBahan'
-        );
-
-
-    const satuanEl =
-        getElement(
-            'inputSatuanBahan'
-        );
-
-
-    const nama =
-        namaEl
-            ? namaEl.value.trim()
-            : '';
-
-
-    const satuan =
-        satuanEl
-            ? satuanEl.value.trim()
-            : '';
-
-
-    if (
-        !nama ||
-        !satuan
-    ) {
-
-        alert(
-            'Nama dan satuan wajib diisi.'
-        );
-
-        return;
-
-    }
-
-
-    const resepValid =
-        tempResep
-            .filter(
-                row =>
-                    safeString(
-                        row.jenisProduk
-                    ).trim() !== '' &&
-                    safeNumber(
-                        row.jumlahPerUnit,
-                        0
-                    ) > 0
-            );
-
-
-    tambahBahanBaku(
-        nama,
-        satuan,
-        resepValid
-    );
-
-
-    tutupModalForm();
-
-}
-
-
-// ============================================================
-// EDIT BAHAN BAKU
-// ============================================================
-//
-// Edit tidak membuat id/saldo baru.
-// Hanya nama, satuan, dan resepKonversi yang diperbarui.
-// ============================================================
-
-function bukaModalEditBahan(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        alert(
-            'Bahan baku tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    tempResep =
-        Array.isArray(
-            bahan.resepKonversi
-        )
-            ? bahan.resepKonversi.map(
-                row => ({
-                    ...row
-                })
-            )
-            : [];
-
-
-    renderFormEditBahan(
-        bahanBakuId
-    );
-
-}
-
-
-function renderFormEditBahan(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        tutupModalForm();
-
-        return;
-
-    }
-
-
-    const rows =
-        tempResep
-            .map(
-                (
-                    row,
-                    index
-                ) => `
-
-                    <div class="flex gap-2 mb-2 items-center">
-
-                        <input
-                            type="text"
-                            value="${escapeHTML(row.jenisProduk)}"
-                            onchange="tempResep[${index}].jenisProduk=this.value"
-                            placeholder="Nama potongan"
-                            class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
-                        >
-
-                        <input
-                            type="number"
-                            min="0"
-                            value="${safeNumber(row.jumlahPerUnit, 1)}"
-                            onchange="tempResep[${index}].jumlahPerUnit=Number(this.value)"
-                            class="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
-                        >
-
-                        <button
-                            onclick="tempResep.splice(${index},1);renderFormEditBahan('${escapeHTML(bahan.id)}')"
-                            class="text-red-500 font-bold px-2"
-                        >
-                            ✕
-                        </button>
-
-                    </div>
-
-                `
-            )
-            .join('');
-
-
-    bukaModalForm(
-
-        'Edit Bahan Baku',
-
-        `
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Nama Bahan Baku
-                </label>
-
-                <input
-                    id="inputNamaBahanEdit"
-                    type="text"
-                    value="${escapeHTML(bahan.nama)}"
-                    placeholder="Contoh: Ayam"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Satuan
-                </label>
-
-                <input
-                    id="inputSatuanBahanEdit"
-                    type="text"
-                    value="${escapeHTML(bahan.satuan)}"
-                    placeholder="Contoh: ekor / kg / liter"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Konversi Hasil Olahan
-                </label>
-
-                <p class="text-[11px] text-gray-400 mb-2">
-                    Contoh: 1 ekor ayam menghasilkan 4 dada dan 2 sayap.
-                </p>
-
-                ${rows}
-
-
-                <button
-                    onclick="tempResep.push({jenisProduk:'',jumlahPerUnit:1});renderFormEditBahan('${escapeHTML(bahan.id)}')"
-                    class="text-xs font-bold text-red-600 mt-1"
-                >
-                    + Tambah Jenis Potongan
-                </button>
-
-            </div>
-
-
-            <p class="text-[11px] text-gray-400 mb-3">
-
-                Nama jenis potongan yang dipakai di Mapping Produk
-                sebaiknya jangan diganti, supaya mapping ke menu kasir
-                tidak putus.
-
-            </p>
-
-
-            <button
-                onclick="submitEditBahan('${escapeHTML(bahan.id)}')"
-                class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-2"
-            >
-                Simpan Perubahan
-            </button>
-
-        `
-    );
-
-}
-
-
-function submitEditBahan(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        alert(
-            'Bahan baku tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    const namaEl =
-        getElement(
-            'inputNamaBahanEdit'
-        );
-
-
-    const satuanEl =
-        getElement(
-            'inputSatuanBahanEdit'
-        );
-
-
-    const nama =
-        namaEl
-            ? namaEl.value.trim()
-            : '';
-
-
-    const satuan =
-        satuanEl
-            ? satuanEl.value.trim()
-            : '';
-
-
-    if (
-        !nama ||
-        !satuan
-    ) {
-
-        alert(
-            'Nama dan satuan wajib diisi.'
-        );
-
-        return;
-
-    }
-
-
-    const resepValid =
-        tempResep
-            .filter(
-                row =>
-                    safeString(
-                        row.jenisProduk
-                    ).trim() !== '' &&
-                    safeNumber(
-                        row.jumlahPerUnit,
-                        0
-                    ) > 0
-            )
-            .map(
-                row => ({
-
-                    jenisProduk:
-                        safeString(
-                            row.jenisProduk
-                        ).trim(),
-
-                    jumlahPerUnit:
-                        safeNumber(
-                            row.jumlahPerUnit,
-                            1
-                        )
-
-                })
-            );
-
-
-    bahan.nama =
-        nama;
-
-    bahan.satuan =
-        satuan;
-
-    bahan.resepKonversi =
-        resepValid;
-
-
-    saveJSON(
-        SK_BAHAN,
-        bahanBakuList
-    );
-
-
-    tempResep = [];
-
-
-    renderSemuaStock();
-
-    tutupModalForm();
-
-}
-
-
-// ============================================================
-// FORM STOK MASUK
-// ============================================================
-
-function bukaModalStokMasuk(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        return;
-
-    }
-
-
-    bukaModalForm(
-
-        'Catat Stok Masuk',
-
-        `
-
-            <p class="text-sm font-bold text-gray-800 mb-3">
-
-                ${escapeHTML(
-                    bahan.nama
-                )}
-
-                <span class="text-gray-400 font-normal">
-                    (${escapeHTML(
-                        bahan.satuan
-                    )})
-                </span>
-
-            </p>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Jumlah Masuk
-                </label>
-
-                <input
-                    id="inputJumlahMasuk"
-                    type="number"
-                    min="0"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Tanggal
-                </label>
-
-                <input
-                    id="inputTanggalMasuk"
-                    type="date"
-                    value="${todayKey()}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Harga per ${escapeHTML(
-                        bahan.satuan
-                    )}
-                </label>
-
-                <input
-                    id="inputHargaMasuk"
-                    type="number"
-                    min="0"
-                    placeholder="Belum wajib diisi"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Catatan
-                </label>
-
-                <input
-                    id="inputCatatanMasuk"
-                    type="text"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <button
-                onclick="submitStokMasuk('${escapeHTML(
-                    bahan.id
-                )}')"
-                class="w-full bg-green-600 text-white font-bold py-3 rounded-xl mt-2"
-            >
-                Simpan Stok Masuk
-            </button>
-
-        `
-    );
-
-}
-
-
-// ============================================================
-// SUBMIT STOK MASUK
-// ============================================================
-
-function submitStokMasuk(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        alert(
-            'Bahan baku tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    const jumlahEl =
-        getElement(
-            'inputJumlahMasuk'
-        );
-
-
-    const tanggalEl =
-        getElement(
-            'inputTanggalMasuk'
-        );
-
-
-    const hargaEl =
-        getElement(
-            'inputHargaMasuk'
-        );
-
-
-    const catatanEl =
-        getElement(
-            'inputCatatanMasuk'
-        );
-
-
-    const jumlah =
-        Math.floor(
-            safeNumber(
-                jumlahEl
-                    ? jumlahEl.value
-                    : 0,
-                0
-            )
-        );
-
-
-    const tanggal =
-        tanggalEl &&
-        tanggalEl.value
-            ? tanggalEl.value
-            : todayKey();
-
-
-    const harga =
-        Math.max(
-            0,
-            safeNumber(
-                hargaEl
-                    ? hargaEl.value
-                    : 0,
-                0
-            )
-        );
-
-
-    const catatan =
-        catatanEl
-            ? safeString(
-                catatanEl.value
-            ).trim()
-            : '';
-
-
-    if (
-        jumlah <= 0
-    ) {
-
-        alert(
-            'Jumlah harus diisi dan lebih dari 0.'
-        );
-
-        return;
-
-    }
-
+// ==============================
+// AKSI: STOK MASUK
+// ==============================
+function submitStokMasuk(bahanBakuId) {
+    const jumlah = Number(document.getElementById('inputJumlahMasuk').value);
+    const tanggal = document.getElementById('inputTanggalMasuk').value || todayKey();
+    const harga = Number(document.getElementById('inputHargaMasuk').value) || 0;
+    const catatan = document.getElementById('inputCatatanMasuk').value.trim();
+
+    if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
 
     stokMasukList.push({
-
-        id:
-            'in_' +
-            Date.now() +
-            '_' +
-            Math.random()
-                .toString(36)
-                .slice(2),
-
-        bahanBakuId:
-            bahan.id,
-
-        jumlah,
-
-        tanggal,
-
-        harga,
-
-        catatan,
-
-        tipe:
-            'pembelian',
-
-        timestamp:
-            new Date().toISOString()
-
+        id: 'in_' + Date.now(),
+        bahanBakuId, jumlah, tanggal, harga, catatan,
+        timestamp: new Date().toISOString()
     });
-
-
-    // ========================================================
-    // STOK MASUK = TAMBAH SALDO GUDANG
-    // ========================================================
-
-    tambahSaldoGudang(
-        bahanBakuId,
-        jumlah
-    );
-
-
-    saveJSON(
-        SK_MASUK,
-        stokMasukList
-    );
-
-
+    saveJSON(SK_MASUK, stokMasukList);
     renderSemuaStock();
-
     tutupModalForm();
-
 }
 
-
-// ============================================================
-// EDIT TRANSAKSI STOK MASUK / PENGEMBALIAN
-// ============================================================
-//
-// Dipakai untuk membetulkan transaksi yang sudah tercatat,
-// misalnya waktu input awal harga belum diketahui
-// dan mau diisi belakangan.
-//
-// Kalau jumlah diubah, saldo gudang disesuaikan
-// mengikuti selisihnya (delta), bukan ditimpa dari nol.
-// ============================================================
-
-function bukaModalEditTransaksiMasuk(
-    bahanBakuId,
-    transaksiId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        alert(
-            'Bahan baku tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    const transaksi =
-        stokMasukList.find(
-            row =>
-                String(
-                    row.id
-                ) ===
-                String(
-                    transaksiId
-                )
-        );
-
-
-    if (!transaksi) {
-
-        alert(
-            'Transaksi tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    const isPengembalian =
-        transaksi.tipe ===
-            'pengembalian';
-
-
-    bukaModalForm(
-
-        isPengembalian
-            ? 'Edit Pengembalian'
-            : 'Edit Stok Masuk',
-
-        `
-
-            <p class="text-sm font-bold text-gray-800 mb-3">
-
-                ${escapeHTML(
-                    bahan.nama
-                )}
-
-                <span class="text-gray-400 font-normal">
-                    (${escapeHTML(
-                        bahan.satuan
-                    )})
-                </span>
-
-            </p>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Jumlah
-                </label>
-
-                <input
-                    id="inputEditJumlahMasuk"
-                    type="number"
-                    min="0"
-                    value="${safeNumber(
-                        transaksi.jumlah,
-                        0
-                    )}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Tanggal
-                </label>
-
-                <input
-                    id="inputEditTanggalMasuk"
-                    type="date"
-                    value="${escapeHTML(
-                        transaksi.tanggal
-                    )}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            ${
-                !isPengembalian
-                    ? `
-
-                        <div class="mb-3">
-
-                            <label class="text-xs font-bold text-gray-500">
-                                Harga per ${escapeHTML(
-                                    bahan.satuan
-                                )}
-                            </label>
-
-                            <input
-                                id="inputEditHargaMasuk"
-                                type="number"
-                                min="0"
-                                value="${
-                                    safeNumber(
-                                        transaksi.harga,
-                                        0
-                                    ) || ''
-                                }"
-                                placeholder="Belum wajib diisi"
-                                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                            >
-
-                        </div>
-
-                    `
-                    : ''
-            }
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Catatan
-                </label>
-
-                <input
-                    id="inputEditCatatanMasuk"
-                    type="text"
-                    value="${escapeHTML(
-                        transaksi.catatan
-                    )}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <button
-                onclick="submitEditTransaksiMasuk('${escapeHTML(
-                    bahanBakuId
-                )}','${escapeHTML(
-                    transaksiId
-                )}')"
-                class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-2"
-            >
-                Simpan Perubahan
-            </button>
-
-        `
-    );
-
-}
-
-
-function submitEditTransaksiMasuk(
-    bahanBakuId,
-    transaksiId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        alert(
-            'Bahan baku tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    const transaksi =
-        stokMasukList.find(
-            row =>
-                String(
-                    row.id
-                ) ===
-                String(
-                    transaksiId
-                )
-        );
-
-
-    if (!transaksi) {
-
-        alert(
-            'Transaksi tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    const jumlahEl =
-        getElement(
-            'inputEditJumlahMasuk'
-        );
-
-
-    const tanggalEl =
-        getElement(
-            'inputEditTanggalMasuk'
-        );
-
-
-    const hargaEl =
-        getElement(
-            'inputEditHargaMasuk'
-        );
-
-
-    const catatanEl =
-        getElement(
-            'inputEditCatatanMasuk'
-        );
-
-
-    const jumlahBaru =
-        Math.floor(
-            safeNumber(
-                jumlahEl
-                    ? jumlahEl.value
-                    : 0,
-                0
-            )
-        );
-
-
-    const tanggalBaru =
-        tanggalEl &&
-        tanggalEl.value
-            ? tanggalEl.value
-            : transaksi.tanggal;
-
-
-    const catatanBaru =
-        catatanEl
-            ? safeString(
-                catatanEl.value
-            ).trim()
-            : '';
-
-
-    if (
-        jumlahBaru <= 0
-    ) {
-
-        alert(
-            'Jumlah harus diisi dan lebih dari 0.'
-        );
-
-        return;
-
-    }
-
-
-    // ========================================================
-    // SESUAIKAN SALDO GUDANG BERDASARKAN SELISIH JUMLAH
-    // ========================================================
-
-    const jumlahLama =
-        Math.max(
-            0,
-            safeNumber(
-                transaksi.jumlah,
-                0
-            )
-        );
-
-
-    const delta =
-        jumlahBaru -
-        jumlahLama;
-
-
-    if (
-        delta > 0
-    ) {
-
-        tambahSaldoGudang(
-            bahanBakuId,
-            delta
-        );
-
-    } else if (
-        delta < 0
-    ) {
-
-        kurangiSaldoGudang(
-            bahanBakuId,
-            Math.abs(
-                delta
-            )
-        );
-
-    }
-
-
-    transaksi.jumlah =
-        jumlahBaru;
-
-    transaksi.tanggal =
-        tanggalBaru;
-
-    transaksi.catatan =
-        catatanBaru;
-
-
-    if (
-        transaksi.tipe !==
-            'pengembalian'
-    ) {
-
-        const hargaBaru =
-            hargaEl
-                ? Math.max(
-                    0,
-                    safeNumber(
-                        hargaEl.value,
-                        0
-                    )
-                )
-                : 0;
-
-
-        transaksi.harga =
-            hargaBaru;
-
-    }
-
-
-    saveJSON(
-        SK_MASUK,
-        stokMasukList
-    );
-
-
-    refreshModalRiwayatBahan(
-        bahanBakuId
-    );
-
-
-    renderSemuaStock();
-
-}
-
-
-// ============================================================
-// FORM STOK KELUAR
-// ============================================================
-
-function bukaModalStokKeluar(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        return;
-
-    }
-
-
-    const tersedia =
-        hitungStokUtama(
-            bahanBakuId
-        );
-
-
-    bukaModalForm(
-
-        'Catat Stok Keluar',
-
-        `
-
-            <p class="text-sm font-bold text-gray-800 mb-1">
-
-                ${escapeHTML(
-                    bahan.nama
-                )}
-
-                <span class="text-gray-400 font-normal">
-                    (${escapeHTML(
-                        bahan.satuan
-                    )})
-                </span>
-
-            </p>
-
-
-            <p class="text-[11px] text-gray-400 mb-3">
-
-                Stok gudang tersedia:
-
-                <span class="font-bold text-gray-700">
-                    ${tersedia}
-                    ${escapeHTML(
-                        bahan.satuan
-                    )}
-                </span>
-
-            </p>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Jumlah Keluar
-                </label>
-
-                <input
-                    id="inputJumlahKeluar"
-                    type="number"
-                    min="0"
-                    max="${tersedia}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Tanggal
-                </label>
-
-                <input
-                    id="inputTanggalKeluar"
-                    type="date"
-                    value="${todayKey()}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Catatan
-                </label>
-
-                <input
-                    id="inputCatatanKeluar"
-                    type="text"
-                    placeholder="Contoh: dibawa ke lapangan"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <button
-                onclick="submitStokKeluar('${escapeHTML(
-                    bahan.id
-                )}')"
-                class="w-full bg-orange-500 text-white font-bold py-3 rounded-xl mt-2"
-            >
-                Simpan Stok Keluar
-            </button>
-
-        `
-    );
-
-}
-
-
-// ============================================================
-// SUBMIT STOK KELUAR
-// ============================================================
-
-function submitStokKeluar(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        alert(
-            'Bahan baku tidak ditemukan.'
-        );
-
-        return;
-
-    }
-
-
-    const jumlahEl =
-        getElement(
-            'inputJumlahKeluar'
-        );
-
-
-    const tanggalEl =
-        getElement(
-            'inputTanggalKeluar'
-        );
-
-
-    const catatanEl =
-        getElement(
-            'inputCatatanKeluar'
-        );
-
-
-    const jumlah =
-        Math.floor(
-            safeNumber(
-                jumlahEl
-                    ? jumlahEl.value
-                    : 0,
-                0
-            )
-        );
-
-
-    const tanggal =
-        tanggalEl &&
-        tanggalEl.value
-            ? tanggalEl.value
-            : todayKey();
-
-
-    const catatan =
-        catatanEl
-            ? safeString(
-                catatanEl.value
-            ).trim()
-            : '';
-
-
-    const tersedia =
-        hitungStokUtama(
-            bahanBakuId
-        );
-
-
-    if (
-        jumlah <= 0
-    ) {
-
-        alert(
-            'Jumlah harus diisi dan lebih dari 0.'
-        );
-
-        return;
-
-    }
-
-
-    if (
-        jumlah >
-        tersedia
-    ) {
-
-        alert(
-            `Stok gudang cuma tersedia ${tersedia} ${bahan.satuan}.`
-        );
-
-        return;
-
-    }
-
+// ==============================
+// AKSI: STOK KELUAR
+// ==============================
+function submitStokKeluar(bahanBakuId) {
+    const jumlah = Number(document.getElementById('inputJumlahKeluar').value);
+    const tanggal = document.getElementById('inputTanggalKeluar').value || todayKey();
+    const catatan = document.getElementById('inputCatatanKeluar').value.trim();
+    const tersedia = hitungStokUtama(bahanBakuId);
+
+    if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
+    if (jumlah > tersedia) { alert(`Stok gudang cuma tersedia ${tersedia}. Gak bisa keluar lebih dari itu.`); return; }
 
     stokKeluarList.push({
-
-        id:
-            'out_' +
-            Date.now() +
-            '_' +
-            Math.random()
-                .toString(36)
-                .slice(2),
-
-        bahanBakuId:
-            bahan.id,
-
-        jumlah,
-
-        tanggal,
-
-        catatan,
-
-        timestamp:
-            new Date().toISOString()
-
+        id: 'out_' + Date.now(),
+        bahanBakuId, jumlah, tanggal, catatan,
+        timestamp: new Date().toISOString()
     });
-
-
-    // ========================================================
-    // STOK KELUAR = KURANGI SALDO GUDANG
-    // ========================================================
-
-    kurangiSaldoGudang(
-        bahanBakuId,
-        jumlah
-    );
-
-
-    saveJSON(
-        SK_KELUAR,
-        stokKeluarList
-    );
-
-
+    saveJSON(SK_KELUAR, stokKeluarList);
     renderSemuaStock();
-
     tutupModalForm();
-
 }
 
+// ==============================
+// AKSI: RETUR (barang balik ke stok gudang, BUKAN pembelian baru)
+// ==============================
+function bukaModalRetur(bahanBakuId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
+    const tersedia = hitungStokLapanganMentah(bahanBakuId);
 
-// ============================================================
-// FORM MASAK
-// ============================================================
+    const html = `
+        <p class="text-sm font-bold text-gray-800 mb-1">${bahan.nama} <span class="text-gray-400 font-normal">(${bahan.satuan})</span></p>
+        <p class="text-[11px] text-gray-400 mb-3">Buat catat barang yang balik lagi dari lapangan ke stok gudang — misal Ayam Utuh yang gak jadi kejual / dikembalikan customer. Otomatis ngurangin Stok Lapangan & nambahin Stok Gudang. TIDAK dihitung sebagai pengeluaran baru.</p>
+        <p class="text-[11px] text-gray-400 mb-3">Stok lapangan saat ini: <span class="font-bold text-gray-700">${tersedia} ${bahan.satuan}</span></p>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Jumlah Kembali</label>
+            <input id="inputJumlahRetur" type="number" min="0" max="${tersedia}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Tanggal</label>
+            <input id="inputTanggalRetur" type="date" value="${todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Catatan</label>
+            <input id="inputCatatanRetur" type="text" placeholder="Contoh: Ayam Utuh gak jadi diambil customer" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <button onclick="submitRetur('${bahanBakuId}')" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-2">Simpan Retur</button>
+    `;
+    bukaModalForm('Retur / Barang Kembali', html);
+}
 
-function bukaModalMasak(
-    bahanBakuId
-) {
+function submitRetur(bahanBakuId) {
+    const jumlah = Number(document.getElementById('inputJumlahRetur').value);
+    const tanggal = document.getElementById('inputTanggalRetur').value || todayKey();
+    const catatan = document.getElementById('inputCatatanRetur').value.trim();
+    const tersedia = hitungStokLapanganMentah(bahanBakuId);
 
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
+    if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
+    if (jumlah > tersedia) { alert(`Stok lapangan cuma tersedia ${tersedia}. Gak bisa retur lebih dari itu.`); return; }
 
+    stokReturList.push({
+        id: 'ret_' + Date.now(),
+        bahanBakuId, jumlah, tanggal, catatan,
+        timestamp: new Date().toISOString()
+    });
+    saveJSON(SK_RETUR, stokReturList);
+    renderSemuaStock();
+    tutupModalForm();
+}
 
-    if (!bahan) {
+// ==============================
+// AKSI: STOK MASAK
+// ==============================
+function prosesMasak(bahanBakuId, jumlahDiproses, tanggal) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
 
+    const tersedia = hitungStokLapanganMentah(bahanBakuId);
+    if (jumlahDiproses > tersedia) {
+        alert(`Stok lapangan ${bahan.nama} cuma tersisa ${tersedia} ${bahan.satuan}.`);
         return;
-
     }
 
-
-    const tersedia =
-        hitungStokLapanganMentah(
-            bahanBakuId
-        );
-
-
-    const resep =
-        Array.isArray(
-            bahan.resepKonversi
-        )
-            ? bahan.resepKonversi
-            : [];
-
-
-    const resepHtml =
-        resep
-            .map(
-                row => `
-
-                    <p class="text-[11px] text-gray-500">
-
-                        ${safeNumber(
-                            row.jumlahPerUnit,
-                            0
-                        )}
-
-                        ${escapeHTML(
-                            row.jenisProduk
-                        )}
-
-                        /
-
-                        ${escapeHTML(
-                            bahan.satuan
-                        )}
-
-                    </p>
-
-                `
-            )
-            .join('');
-
-
-    bukaModalForm(
-
-        'Proses Masak',
-
-        `
-
-            <p class="text-sm font-bold text-gray-800 mb-1">
-                ${escapeHTML(
-                    bahan.nama
-                )}
-            </p>
-
-
-            <p class="text-[11px] text-gray-400 mb-2">
-
-                Stok lapangan:
-
-                <span class="font-bold text-gray-700">
-                    ${tersedia}
-                    ${escapeHTML(
-                        bahan.satuan
-                    )}
-                </span>
-
-            </p>
-
-
-            <div class="bg-gray-50 rounded-lg p-2 mb-3">
-
-                <p class="text-[11px] font-bold text-gray-500 mb-1">
-                    Konversi per ${escapeHTML(
-                        bahan.satuan
-                    )}:
-                </p>
-
-                ${
-                    resepHtml ||
-                    '<p class="text-[11px] text-gray-400">Belum ada konversi.</p>'
-                }
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Jumlah Diproses (${escapeHTML(
-                        bahan.satuan
-                    )})
-                </label>
-
-                <input
-                    id="inputJumlahMasak"
-                    type="number"
-                    min="0"
-                    max="${tersedia}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <div class="mb-3">
-
-                <label class="text-xs font-bold text-gray-500">
-                    Tanggal
-                </label>
-
-                <input
-                    id="inputTanggalMasak"
-                    type="date"
-                    value="${todayKey()}"
-                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1"
-                >
-
-            </div>
-
-
-            <button
-                onclick="submitMasak('${escapeHTML(
-                    bahan.id
-                )}')"
-                class="w-full bg-red-600 text-white font-bold py-3 rounded-xl mt-2"
-            >
-                Proses & Simpan
-            </button>
-
-        `
-    );
-
-}
-
-
-// ============================================================
-// PROSES MASAK
-// ============================================================
-
-function prosesMasak(
-    bahanBakuId,
-    jumlahDiproses,
-    tanggal
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        alert(
-            'Bahan baku tidak ditemukan.'
-        );
-
-        return false;
-
-    }
-
-
-    const jumlah =
-        Math.floor(
-            safeNumber(
-                jumlahDiproses,
-                0
-            )
-        );
-
-
-    const tanggalFinal =
-        tanggal ||
-        todayKey();
-
-
-    if (
-        jumlah <= 0
-    ) {
-
-        alert(
-            'Jumlah masak harus lebih dari 0.'
-        );
-
-        return false;
-
-    }
-
-
-    const tersedia =
-        hitungStokLapanganMentah(
-            bahanBakuId,
-            tanggalFinal
-        );
-
-
-    if (
-        jumlah >
-        tersedia
-    ) {
-
-        alert(
-            `Stok lapangan ${bahan.nama} cuma tersisa ${tersedia} ${bahan.satuan}.`
-        );
-
-        return false;
-
-    }
-
-
-    const resep =
-        Array.isArray(
-            bahan.resepKonversi
-        )
-            ? bahan.resepKonversi
-            : [];
-
-
-    const hasil =
-        resep
-            .filter(
-                row =>
-                    safeString(
-                        row.jenisProduk
-                    ).trim() !== '' &&
-                    safeNumber(
-                        row.jumlahPerUnit,
-                        0
-                    ) > 0
-            )
-            .map(
-                row => ({
-
-                    jenisProduk:
-                        safeString(
-                            row.jenisProduk
-                        ).trim(),
-
-                    jumlah:
-                        safeNumber(
-                            row.jumlahPerUnit,
-                            0
-                        ) *
-                        jumlah
-
-                })
-            );
-
+    const hasil = (bahan.resepKonversi || []).map(r => ({
+        jenisProduk: r.jenisProduk,
+        jumlah: r.jumlahPerUnit * jumlahDiproses
+    }));
 
     stokMasakList.push({
-
-        id:
-            'sm_' +
-            Date.now() +
-            '_' +
-            Math.random()
-                .toString(36)
-                .slice(2),
-
-        bahanBakuId:
-            bahan.id,
-
-        jumlahDiproses:
-            jumlah,
-
-        tanggal:
-            tanggalFinal,
-
-        hasil,
-
-        timestamp:
-            new Date().toISOString()
-
+        id: 'sm_' + Date.now(),
+        bahanBakuId, jumlahDiproses,
+        tanggal: tanggal || todayKey(),
+        timestamp: new Date().toISOString(),
+        hasil
     });
-
-
-    saveJSON(
-        SK_MASAK,
-        stokMasakList
-    );
-
-
+    saveJSON(SK_MASAK, stokMasakList);
     renderSemuaStock();
-
-    return true;
-
 }
 
-
-function submitMasak(
-    bahanBakuId
-) {
-
-    const jumlahEl =
-        getElement(
-            'inputJumlahMasak'
-        );
-
-
-    const tanggalEl =
-        getElement(
-            'inputTanggalMasak'
-        );
-
-
-    const jumlah =
-        Math.floor(
-            safeNumber(
-                jumlahEl
-                    ? jumlahEl.value
-                    : 0
-            )
-        );
-
-
-    const tanggal =
-        tanggalEl &&
-        tanggalEl.value
-            ? tanggalEl.value
-            : todayKey();
-
-
-    const berhasil =
-        prosesMasak(
-            bahanBakuId,
-            jumlah,
-            tanggal
-        );
-
-
-    if (
-        berhasil
-    ) {
-
-        tutupModalForm();
-
-    }
-
+function submitMasak(bahanBakuId) {
+    const jumlah = Number(document.getElementById('inputJumlahMasak').value);
+    const tanggal = document.getElementById('inputTanggalMasak').value || todayKey();
+    if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
+    prosesMasak(bahanBakuId, jumlah, tanggal);
+    tutupModalForm();
 }
 
-// ============================================================
-// MAPPING PRODUK
-// ============================================================
-//
-// Mapping:
-// MENU KASIR
-//      ↓
-// JENIS PRODUK
-//      ↓
-// JUMLAH PER PORSI
-//
-// Contoh:
-// Ayam Dada  → Dada x1
-// Paket 2    → Dada x1 + Sayap x1
-// ============================================================
-
-function tambahMappingRow(
-    menuItemId
-) {
-
-    if (
-        !Array.isArray(
-            produkMapping[
-                menuItemId
-            ]
-        )
-    ) {
-
-        produkMapping[
-            menuItemId
-        ] = [];
-
-    }
-
-
-    produkMapping[
-        menuItemId
-    ].push({
-
-        jenisProduk:
-            '',
-
-        jumlahPerPorsi:
-            1
-
-    });
-
-
-    saveJSON(
-        SK_MAPPING,
-        produkMapping
-    );
-
-
-    refreshModalMapping();
-
-}
-
-
-function hapusMappingRow(
-    menuItemId,
-    index
-) {
-
-    if (
-        !Array.isArray(
-            produkMapping[
-                menuItemId
-            ]
-        )
-    ) {
-
-        return;
-
-    }
-
-
-    if (
-        !produkMapping[
-            menuItemId
-        ][index]
-    ) {
-
-        return;
-
-    }
-
-
-    produkMapping[
-        menuItemId
-    ].splice(
-        index,
-        1
-    );
-
-
-    if (
-        produkMapping[
-            menuItemId
-        ].length ===
-            0
-    ) {
-
-        delete produkMapping[
-            menuItemId
-        ];
-
-    }
-
-
-    saveJSON(
-        SK_MAPPING,
-        produkMapping
-    );
-
-
-    refreshModalMapping();
-
-    renderRekonsiliasi();
-
-}
-
-
-function updateMappingRowJenis(
-    menuItemId,
-    index,
-    jenisProduk
-) {
-
-    if (
-        !produkMapping[
-            menuItemId
-        ] ||
-        !produkMapping[
-            menuItemId
-        ][index]
-    ) {
-
-        return;
-
-    }
-
-
-    produkMapping[
-        menuItemId
-    ][index].jenisProduk =
-        safeString(
-            jenisProduk
-        ).trim();
-
-
-    saveJSON(
-        SK_MAPPING,
-        produkMapping
-    );
-
-
-    renderRekonsiliasi();
-
-}
-
-
-function updateMappingRowJumlah(
-    menuItemId,
-    index,
-    jumlah
-) {
-
-    if (
-        !produkMapping[
-            menuItemId
-        ] ||
-        !produkMapping[
-            menuItemId
-        ][index]
-    ) {
-
-        return;
-
-    }
-
-
-    const nilai =
-        Math.max(
-            1,
-            safeNumber(
-                jumlah,
-                1
-            )
-        );
-
-
-    produkMapping[
-        menuItemId
-    ][index].jumlahPerPorsi =
-        nilai;
-
-
-    saveJSON(
-        SK_MAPPING,
-        produkMapping
-    );
-
-
-    renderRekonsiliasi();
-
-}
-
-
-function bukaModalMapping() {
-
-    const jenisList =
-        getJenisProdukList();
-
-
-    if (
-        typeof menuData ===
-            'undefined' ||
-        !Array.isArray(
-            menuData
-        ) ||
-        menuData.length ===
-            0
-    ) {
-
-        bukaModalForm(
-
-            'Mapping Produk',
-
-            `
-                <p class="text-xs text-gray-400 text-center py-6">
-                    Data menu kasir belum ditemukan.
-                </p>
-            `
-
-        );
-
-        return;
-
-    }
-
-
-    if (
-        jenisList.length ===
-            0
-    ) {
-
-        bukaModalForm(
-
-            'Mapping Produk',
-
-            `
-                <p class="text-xs text-gray-400 text-center py-6">
-                    Belum ada jenis produk.
-                    <br>
-                    Tambahkan konversi pada bahan baku terlebih dahulu.
-                </p>
-            `
-
-        );
-
-        return;
-
-    }
-
-
-    bukaModalForm(
-
-        'Mapping Produk ke Kasir',
-
-        buildMappingHtml(
-            jenisList
-        )
-
-    );
-
-}
-
-
-function refreshModalMapping() {
-
-    const body =
-        getElement(
-            'modalFormBody'
-        );
-
-
-    if (!body) {
-
-        return;
-
-    }
-
-
-    body.innerHTML =
-        buildMappingHtml(
-            getJenisProdukList()
-        );
-
-}
-
-
-function buildMappingHtml(
-    jenisList
-) {
-
-    if (
-        typeof menuData ===
-            'undefined' ||
-        !Array.isArray(
-            menuData
-        )
-    ) {
-
-        return `
-
-            <p class="text-xs text-gray-400 text-center py-6">
-                Data menu kasir belum ditemukan.
-            </p>
-
-        `;
-
-    }
-
-
-    const rows =
-        menuData
-            .map(
-                item => {
-
-                    const mappings =
-                        Array.isArray(
-                            produkMapping[
-                                item.id
-                            ]
-                        )
-                            ? produkMapping[
-                                item.id
-                            ]
-                            : [];
-
-
-                    const mappingRowsHtml =
-                        mappings
-                            .map(
-                                (
-                                    mapping,
-                                    index
-                                ) => {
-
-                                    const selectedJenis =
-                                        safeString(
-                                            mapping.jenisProduk
-                                        );
-
-
-                                    const options =
-                                        `
-                                        <option value="">
-                                            - pilih jenis -
-                                        </option>
-                                        ` +
-
-                                        jenisList
-                                            .map(
-                                                jenis => `
-
-                                                    <option
-                                                        value="${escapeHTML(
-                                                            jenis
-                                                        )}"
-                                                        ${
-                                                            selectedJenis ===
-                                                            jenis
-                                                                ? 'selected'
-                                                                : ''
-                                                        }
-                                                    >
-                                                        ${escapeHTML(
-                                                            jenis
-                                                        )}
-                                                    </option>
-
-                                                `
-                                            )
-                                            .join('');
-
-
-                                    return `
-
-                                        <div class="flex gap-2 mb-1.5 items-center">
-
-                                            <select
-                                                onchange="updateMappingRowJenis('${escapeHTML(
-                                                    item.id
-                                                )}', ${index}, this.value)"
-                                                class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white"
-                                            >
-
-                                                ${options}
-
-                                            </select>
-
-
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                value="${Math.max(
-                                                    1,
-                                                    safeNumber(
-                                                        mapping.jumlahPerPorsi,
-                                                        1
-                                                    )
-                                                )}"
-                                                onchange="updateMappingRowJumlah('${escapeHTML(
-                                                    item.id
-                                                )}', ${index}, this.value)"
-                                                class="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs"
-                                            >
-
-
-                                            <button
-                                                type="button"
-                                                onclick="hapusMappingRow('${escapeHTML(
-                                                    item.id
-                                                )}', ${index})"
-                                                class="text-red-500 font-bold px-1"
-                                            >
-                                                ✕
-                                            </button>
-
-                                        </div>
-
-                                    `;
-
-                                }
-                            )
-                            .join('');
-
-
-                    return `
-
-                        <div class="border-b border-gray-100 py-3">
-
-                            <p class="text-sm font-bold text-gray-700 mb-1">
-
-                                ${escapeHTML(
-                                    item.name
-                                )}
-
-                            </p>
-
-
-                            ${
-                                mappingRowsHtml ||
-
-                                `
-                                    <p class="text-[11px] text-gray-300 mb-1">
-                                        Belum dipetakan
-                                    </p>
-                                `
-                            }
-
-
-                            <button
-                                type="button"
-                                onclick="tambahMappingRow('${escapeHTML(
-                                    item.id
-                                )}')"
-                                class="text-[11px] font-bold text-red-600"
-                            >
-                                + Tambah potongan
-                            </button>
-
-                        </div>
-
-                    `;
-
-                }
-            )
-            .join('');
-
-
-    return `
-
-        <div class="mb-3">
-
-            <p class="text-[11px] text-gray-400 leading-relaxed">
-
-                Tentukan produk kasir menggunakan
-                jenis potongan dari bahan baku.
-
-                <br>
-
-                Angka di sebelah kanan adalah
-                jumlah potongan per 1 porsi.
-
-            </p>
-
-        </div>
-
-
-        ${rows}
-
-    `;
-
-}
-
-// ============================================================
-// HAPUS BAHAN BAKU
-// ============================================================
-
-function hapusBahanBaku(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        return;
-
-    }
-
-
-    const yakin =
-        confirm(
-            `Yakin mau hapus "${bahan.nama}"?\n\nData bahan, saldo gudang, dan seluruh transaksi bahan ini akan dihapus.\n\nTindakan ini tidak bisa dibatalkan.`
-        );
-
-
-    if (!yakin) {
-
-        return;
-
-    }
-
-
-    delete saldoGudang[
-        String(
-            bahanBakuId
-        )
-    ];
-
-
-    bahanBakuList =
-        bahanBakuList.filter(
-            row =>
-                String(
-                    row.id
-                ) !==
-                String(
-                    bahanBakuId
-                )
-        );
-
-
-    stokMasukList =
-        stokMasukList.filter(
-            row =>
-                String(
-                    row.bahanBakuId
-                ) !==
-                String(
-                    bahanBakuId
-                )
-        );
-
-
-    stokKeluarList =
-        stokKeluarList.filter(
-            row =>
-                String(
-                    row.bahanBakuId
-                ) !==
-                String(
-                    bahanBakuId
-                )
-        );
-
-
-    stokMasakList =
-        stokMasakList.filter(
-            row =>
-                String(
-                    row.bahanBakuId
-                ) !==
-                String(
-                    bahanBakuId
-                )
-        );
-
-
-    saveJSON(
-        SK_BAHAN,
-        bahanBakuList
-    );
-
-    saveJSON(
-        SK_MASUK,
-        stokMasukList
-    );
-
-    saveJSON(
-        SK_KELUAR,
-        stokKeluarList
-    );
-
-    saveJSON(
-        SK_MASAK,
-        stokMasakList
-    );
-
-    simpanSaldoGudang();
-
-
-    renderSemuaStock();
-
-}
-
-
-// ============================================================
-// RIWAYAT BAHAN
-// ============================================================
-
-function bukaModalRiwayatBahan(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        return;
-
-    }
-
-
-    bukaModalForm(
-
-        `Riwayat ${bahan.nama}`,
-
-        buildRiwayatBahanHtml(
-            bahanBakuId
-        )
-
-    );
-
-}
-
-
-function refreshModalRiwayatBahan(
-    bahanBakuId
-) {
-
-    const body =
-        getElement(
-            'modalFormBody'
-        );
-
-
-    if (!body) {
-
-        return;
-
-    }
-
-
-    body.innerHTML =
-        buildRiwayatBahanHtml(
-            bahanBakuId
-        );
-
-}
-
-
-function buildRiwayatBahanHtml(
-    bahanBakuId
-) {
-
-    const bahan =
-        getBahanById(
-            bahanBakuId
-        );
-
-
-    if (!bahan) {
-
-        return `
-
-            <p class="text-xs text-gray-400 text-center py-6">
-                Bahan baku tidak ditemukan.
-            </p>
-
-        `;
-
-    }
-
-
-    const transaksiMasuk =
-        stokMasukList
-            .filter(
-                row =>
-                    String(
-                        row.bahanBakuId
-                    ) ===
-                    String(
-                        bahanBakuId
-                    )
-            )
-            .map(
-                row => ({
-
-                    ...row,
-
-                    riwayatTipe:
-                        row.tipe ===
-                            'pengembalian'
-                            ? 'pengembalian'
-                            : 'masuk'
-
-                })
-            );
-
-
-    const transaksiKeluar =
-        stokKeluarList
-            .filter(
-                row =>
-                    String(
-                        row.bahanBakuId
-                    ) ===
-                    String(
-                        bahanBakuId
-                    )
-            )
-            .map(
-                row => ({
-
-                    ...row,
-
-                    riwayatTipe:
-                        'keluar',
-
-                    jumlah:
-                        safeNumber(
-                            row.jumlah,
-                            0
-                        )
-
-                })
-            );
-
-
-    const transaksiMasak =
-        stokMasakList
-            .filter(
-                row =>
-                    String(
-                        row.bahanBakuId
-                    ) ===
-                    String(
-                        bahanBakuId
-                    )
-            )
-            .map(
-                row => ({
-
-                    ...row,
-
-                    riwayatTipe:
-                        'masak',
-
-                    jumlah:
-                        safeNumber(
-                            row.jumlahDiproses,
-                            0
-                        )
-
-                })
-            );
-
-
-    const semuaTransaksi = [
-
-        ...transaksiMasuk,
-
-        ...transaksiKeluar,
-
-        ...transaksiMasak
-
-    ];
-
-
-    semuaTransaksi.sort(
-        (
-            a,
-            b
-        ) => {
-
-            const ta =
-                new Date(
-                    a.timestamp ||
-                    `${a.tanggal}T00:00:00`
-                ).getTime();
-
-
-            const tb =
-                new Date(
-                    b.timestamp ||
-                    `${b.tanggal}T00:00:00`
-                ).getTime();
-
-
-            return (
-                Number.isFinite(tb)
-                    ? tb
-                    : 0
-            ) -
-            (
-                Number.isFinite(ta)
-                    ? ta
-                    : 0
-            );
-
-        }
-    );
-
-
-    if (
-        semuaTransaksi.length ===
-            0
-    ) {
-
-        return `
-
-            <p class="text-xs text-gray-400 text-center py-6">
-                Belum ada transaksi buat bahan ini.
-            </p>
-
-        `;
-
-    }
-
-
-    return semuaTransaksi
-        .map(
-            transaction => {
-
-                let warna =
-                    'text-gray-600';
-
-                let label =
-                    'Transaksi';
-
-                let tanda =
-                    '';
-
-
-                if (
-                    transaction.riwayatTipe ===
-                    'pengembalian'
-                ) {
-
-                    warna =
-                        'text-blue-600';
-
-                    label =
-                        'Dikembalikan';
-
-                    tanda =
-                        '+';
-
-                }
-
-                else if (
-                    transaction.riwayatTipe ===
-                    'masuk'
-                ) {
-
-                    warna =
-                        'text-green-600';
-
-                    label =
-                        'Masuk';
-
-                    tanda =
-                        '+';
-
-                }
-
-                else if (
-                    transaction.riwayatTipe ===
-                    'keluar'
-                ) {
-
-                    warna =
-                        'text-orange-500';
-
-                    label =
-                        'Keluar';
-
-                    tanda =
-                        '-';
-
-                }
-
-                else if (
-                    transaction.riwayatTipe ===
-                    'masak'
-                ) {
-
-                    warna =
-                        'text-red-600';
-
-                    label =
-                        'Masak';
-
-                    tanda =
-                        '-';
-
-                }
-
-
-                return `
-
-                    <div class="flex justify-between items-center py-2 border-b border-gray-50">
-
-                        <div class="min-w-0">
-
-                            <p class="font-semibold text-sm text-gray-700">
-
-                                ${label}
-
-                                <span class="${warna} font-bold">
-
-                                    ${tanda}${safeNumber(
-                                        transaction.jumlah,
-                                        0
-                                    )}
-
-                                    ${escapeHTML(
-                                        bahan.satuan
-                                    )}
-
-                                </span>
-
-                            </p>
-
-
-                            <p class="text-[11px] text-gray-400">
-
-                                ${escapeHTML(
-                                    transaction.tanggal
-                                )}
-
-                                ${
-                                    transaction.catatan
-                                        ? ' · ' +
-                                          escapeHTML(
-                                              transaction.catatan
-                                          )
-                                        : ''
-                                }
-
-                            </p>
-
-                        </div>
-
-
-                        <div class="flex items-center gap-1 shrink-0">
-
-                            ${
-                                (
-                                    transaction.riwayatTipe ===
-                                        'masuk' ||
-                                    transaction.riwayatTipe ===
-                                        'pengembalian'
-                                )
-                                    ? `
-
-                                        <button
-                                            onclick="bukaModalEditTransaksiMasuk('${escapeHTML(
-                                                bahanBakuId
-                                            )}','${escapeHTML(
-                                                transaction.id
-                                            )}')"
-                                            class="text-blue-500 font-bold text-xs px-2"
-                                        >
-                                            Edit
-                                        </button>
-
-                                    `
-                                    : ''
-                            }
-
-
-                            <button
-                                onclick="hapusTransaksiBahan('${escapeHTML(
-                                    bahanBakuId
-                                )}','${escapeHTML(
-                                    transaction.riwayatTipe
-                                )}','${escapeHTML(
-                                    transaction.id
-                                )}')"
-                                class="text-red-500 font-bold text-xs px-2"
-                            >
-                                Hapus
-                            </button>
-
-                        </div>
-
-                    </div>
-
-                `;
-
-            }
-        )
-        .join('');
-
-}
-
-
-// ============================================================
-// HAPUS TRANSAKSI
-// ============================================================
-//
-// PENTING:
-//
-// Karena saldo gudang sekarang permanen,
-// menghapus transaksi harus membalik efek transaksinya.
-//
-// MASUK       → saldo dikurangi
-// PENGEMBALIAN→ saldo dikurangi
-// KELUAR      → saldo ditambah
-// MASAK       → tidak menyentuh saldo gudang
-// ============================================================
-
-function hapusTransaksiBahan(
-    bahanBakuId,
-    tipe,
-    id
-) {
-
-    if (
-        !confirm(
-            'Hapus transaksi ini? Saldo gudang akan disesuaikan kembali.'
-        )
-    ) {
-
-        return;
-
-    }
-
-
-    const targetId =
-        String(
-            id
-        );
-
-
-    if (
-        tipe === 'masuk' ||
-        tipe === 'pengembalian'
-    ) {
-
-        const target =
-            stokMasukList.find(
-                row =>
-                    String(
-                        row.id
-                    ) ===
-                    targetId
-            );
-
-
-        if (target) {
-
-            const jumlah =
-                Math.max(
-                    0,
-                    safeNumber(
-                        target.jumlah,
-                        0
-                    )
-                );
-
-
-            kurangiSaldoGudang(
-                target.bahanBakuId,
-                jumlah
-            );
-
-        }
-
-
-        stokMasukList =
-            stokMasukList.filter(
-                row =>
-                    String(
-                        row.id
-                    ) !==
-                    targetId
-            );
-
-
-        saveJSON(
-            SK_MASUK,
-            stokMasukList
-        );
-
-    }
-
-
-    else if (
-        tipe === 'keluar'
-    ) {
-
-        const target =
-            stokKeluarList.find(
-                row =>
-                    String(
-                        row.id
-                    ) ===
-                    targetId
-            );
-
-
-        if (target) {
-
-            const jumlah =
-                Math.max(
-                    0,
-                    safeNumber(
-                        target.jumlah,
-                        0
-                    )
-                );
-
-
-            tambahSaldoGudang(
-                target.bahanBakuId,
-                jumlah
-            );
-
-        }
-
-
-        stokKeluarList =
-            stokKeluarList.filter(
-                row =>
-                    String(
-                        row.id
-                    ) !==
-                    targetId
-            );
-
-
-        saveJSON(
-            SK_KELUAR,
-            stokKeluarList
-        );
-
-    }
-
-
-    else if (
-        tipe === 'masak'
-    ) {
-
-        stokMasakList =
-            stokMasakList.filter(
-                row =>
-                    String(
-                        row.id
-                    ) !==
-                    targetId
-            );
-
-
-        saveJSON(
-            SK_MASAK,
-            stokMasakList
-        );
-
-    }
-
-
-    refreshModalRiwayatBahan(
-        bahanBakuId
-    );
-
-
-    renderSemuaStock();
-
-}
-
-
-// ============================================================
-// RENDER BAHAN BAKU
-// ============================================================
-
-function renderBahanBakuList() {
-
-    const container =
-        getElement(
-            'listBahanBaku'
-        );
-
-
-    if (!container) {
-
-        return;
-
-    }
-
-
-    if (
-        bahanBakuList.length ===
-            0
-    ) {
-
-        container.innerHTML = `
-
-            <p class="text-xs text-gray-400 text-center py-6">
-                Belum ada bahan baku.
-            </p>
-
-        `;
-
-        return;
-
-    }
-
-
-    container.innerHTML =
-        bahanBakuList
-            .map(
-                bahan => {
-
-                    const stokGudang =
-                        hitungStokUtama(
-                            bahan.id
-                        );
-
-
-                    const stokLapangan =
-                        hitungStokLapanganMentah(
-                            bahan.id
-                        );
-
-
-                    const bisaMasak =
-                        Array.isArray(
-                            bahan.resepKonversi
-                        ) &&
-                        bahan.resepKonversi.length >
-                            0;
-
-
-                    return `
-
-                        <div class="bg-white rounded-xl border border-gray-100 p-3">
-
-                            <div class="flex justify-between items-start mb-2">
-
-                                <div class="min-w-0">
-
-                                    <p class="font-bold text-sm text-gray-800">
-                                        ${escapeHTML(
-                                            bahan.nama
-                                        )}
-                                    </p>
-
-
-                                    <p class="text-[11px] text-gray-400">
-
-                                        Stok Gudang:
-
-                                        <span class="font-bold text-gray-700">
-                                            ${stokGudang}
-                                            ${escapeHTML(
-                                                bahan.satuan
-                                            )}
-                                        </span>
-
-
-                                        &middot;
-
-
-                                        Stok Lapangan:
-
-                                        <span class="font-bold text-gray-700">
-                                            ${stokLapangan}
-                                            ${escapeHTML(
-                                                bahan.satuan
-                                            )}
-                                        </span>
-
-                                    </p>
-
-                                </div>
-
-
-                                <div class="flex items-center gap-1 shrink-0">
-
-                                    <button
-                                        onclick="bukaModalEditBahan('${escapeHTML(
-                                            bahan.id
-                                        )}')"
-                                        title="Edit"
-                                        class="w-7 h-7 flex items-center justify-center bg-blue-50 rounded-full text-blue-500 text-xs"
-                                    >
-                                        ✏️
-                                    </button>
-
-
-                                    <button
-                                        onclick="bukaModalRiwayatBahan('${escapeHTML(
-                                            bahan.id
-                                        )}')"
-                                        title="Riwayat"
-                                        class="w-7 h-7 flex items-center justify-center bg-gray-50 rounded-full text-gray-400 text-xs"
-                                    >
-                                        📜
-                                    </button>
-
-
-                                    <button
-                                        onclick="hapusBahanBaku('${escapeHTML(
-                                            bahan.id
-                                        )}')"
-                                        title="Hapus"
-                                        class="w-7 h-7 flex items-center justify-center bg-red-50 rounded-full text-red-500 text-xs"
-                                    >
-                                        🗑
-                                    </button>
-
-                                </div>
-
-                            </div>
-
-
-                            <div class="flex gap-2">
-
-                                <button
-                                    onclick="bukaModalStokMasuk('${escapeHTML(
-                                        bahan.id
-                                    )}')"
-                                    class="flex-1 text-[11px] font-bold py-1.5 rounded-full bg-green-50 text-green-700"
-                                >
-                                    + Masuk
-                                </button>
-
-
-                                <button
-                                    onclick="bukaModalStokKeluar('${escapeHTML(
-                                        bahan.id
-                                    )}')"
-                                    class="flex-1 text-[11px] font-bold py-1.5 rounded-full bg-orange-50 text-orange-700"
-                                >
-                                    - Keluar
-                                </button>
-
-
-                                ${
-                                    bisaMasak
-                                        ? `
-
-                                            <button
-                                                onclick="bukaModalMasak('${escapeHTML(
-                                                    bahan.id
-                                                )}')"
-                                                class="flex-1 text-[11px] font-bold py-1.5 rounded-full bg-red-50 text-red-700"
-                                            >
-                                                Masak
-                                            </button>
-
-                                        `
-                                        : ''
-                                }
-
-                            </div>
-
-                        </div>
-
-                    `;
-
-                }
-            )
-            .join('');
-
-}
-
-
-// ============================================================
-// RENDER SECTION PENGEMBALIAN DINAMIS
-// ============================================================
-//
-// HTML lama yang bertuliskan:
-// "Ayam Utuh Dikembalikan"
-//
-// akan otomatis diganti.
-// ============================================================
-
-function ensureDynamicReturnSection() {
-
-    const existing =
-        getElement(
-            'listStokDikembalikan'
-        );
-
-
-    if (existing) {
-
-        return existing;
-
-    }
-
-
-    const stockPage =
-        getElement(
-            'pageStock'
-        );
-
-
-    if (!stockPage) {
-
-        return null;
-
-    }
-
-
-    const sections =
-        stockPage.querySelectorAll(
-            'section'
-        );
-
-
-    let target =
-        null;
-
-
-    sections.forEach(
-        section => {
-
-            const text =
-                safeString(
-                    section.innerText
-                )
-                    .toLowerCase();
-
-
-            if (
-                text.includes(
-                    'ayam utuh dikembalikan'
-                )
-            ) {
-
-                target =
-                    section;
-
-            }
-
-        }
-    );
-
-
-    if (!target) {
-
-        return null;
-
-    }
-
-
-    target.innerHTML = `
-
-        <div class="flex justify-between items-center mb-3">
-
-            <h2 class="text-xs font-black text-red-700 uppercase tracking-wider">
-                Stok Dikembalikan
-            </h2>
-
-        </div>
-
-
-        <p class="text-[11px] text-gray-400 mb-3">
-
-            Daftar otomatis mengikuti
-            Bahan Baku & Stok di atas.
-
-        </p>
-
-
-        <div
-            id="listStokDikembalikan"
-            class="space-y-3"
-        ></div>
-
-    `;
-
-
-    return getElement(
-        'listStokDikembalikan'
-    );
-
-}
-
-
-function renderStokDikembalikan() {
-
-    const container =
-        ensureDynamicReturnSection();
-
-
-    if (!container) {
-
-        return;
-
-    }
-
-
-    if (
-        bahanBakuList.length ===
-            0
-    ) {
-
-        container.innerHTML = `
-
-            <div class="bg-gray-50 border border-gray-100 rounded-xl p-4">
-
-                <p class="text-xs text-gray-400 text-center">
-                    Belum ada bahan baku.
-                </p>
-
-            </div>
-
-        `;
-
-        return;
-
-    }
-
-
-    container.innerHTML =
-        bahanBakuList
-            .map(
-                bahan => {
-
-                    const kembali =
-                        getJumlahDikembalikanHariIni(
-                            bahan.id
-                        );
-
-
-                    const lapangan =
-                        hitungStokLapanganMentah(
-                            bahan.id
-                        );
-
-
-                    const minusDisabled =
-                        kembali <= 0
-                            ? 'opacity-40'
-                            : '';
-
-
-                    const plusDisabled =
-                        lapangan <= 0
-                            ? 'opacity-40'
-                            : '';
-
-
-                    return `
-
-                        <div class="bg-gray-50 border border-gray-100 rounded-xl p-4">
-
-                            <div class="flex justify-between items-center gap-3">
-
-                                <div class="min-w-0">
-
-                                    <p class="text-sm font-bold text-gray-800">
-                                        ${escapeHTML(
-                                            bahan.nama
-                                        )}
-                                    </p>
-
-
-                                    <p class="text-[10px] text-gray-400">
-
-                                        Lapangan:
-
-                                        <span class="font-bold text-gray-600">
-                                            ${lapangan}
-                                            ${escapeHTML(
-                                                bahan.satuan
-                                            )}
-                                        </span>
-
-                                    </p>
-
-                                </div>
-
-
-                                <div class="flex items-center gap-3 bg-white px-2 py-1.5 rounded-full border border-gray-200 shrink-0">
-
-                                    <button
-                                        onclick="ubahStokDikembalikan('${escapeHTML(
-                                            bahan.id
-                                        )}', -1)"
-                                        class="w-8 h-8 flex items-center justify-center bg-gray-50 text-gray-600 rounded-full shadow-sm font-bold text-lg ${minusDisabled}"
-                                    >
-                                        -
-                                    </button>
-
-
-                                    <span class="w-12 text-center font-bold text-gray-800 text-sm">
-                                        ${kembali}
-                                    </span>
-
-
-                                    <button
-                                        onclick="ubahStokDikembalikan('${escapeHTML(
-                                            bahan.id
-                                        )}', 1)"
-                                        class="w-8 h-8 flex items-center justify-center bg-red-100 text-red-600 rounded-full shadow-sm font-bold text-lg ${plusDisabled}"
-                                    >
-                                        +
-                                    </button>
-
-                                </div>
-
-                            </div>
-
-
-                            <p class="text-[10px] text-gray-400 mt-2">
-
-                                Dikembalikan:
-
-                                <span class="font-bold text-blue-600">
-                                    ${kembali}
-                                    ${escapeHTML(
-                                        bahan.satuan
-                                    )}
-                                </span>
-
-                            </p>
-
-                        </div>
-
-                    `;
-
-                }
-            )
-            .join('');
-
-}
-
-
-// ============================================================
-// REKONSILIASI
-// ============================================================
-
-function renderRekonsiliasi() {
-
-    const tbody =
-        getElement(
-            'tabelRekonsiliasi'
-        );
-
-
-    if (!tbody) {
-
-        return;
-
-    }
-
-
-    const jenisList =
-        getJenisProdukList();
-
-
-    if (
-        jenisList.length ===
-            0
-    ) {
-
-        tbody.innerHTML = `
-
-            <tr>
-
-                <td
-                    colspan="6"
-                    class="p-4 text-center text-gray-400 text-xs"
-                >
-                    Belum ada jenis produk.
-                </td>
-
-            </tr>
-
-        `;
-
-        return;
-
-    }
-
-
-    let totalMasak =
-        0;
-
-    let totalTerjual =
-        0;
-
-    let totalHarusnya =
-        0;
-
-    let totalFisik =
-        0;
-
-    let totalSelisih =
-        0;
-
-    let adaFisik =
-        false;
-
-
-    const rows =
-        jenisList
-            .map(
-                jenis => {
-
-                    const masak =
-                        getStokMasakHariIni(
-                            jenis
-                        );
-
-
-                    const terjual =
-                        getPenjualanTercatat(
-                            jenis
-                        );
-
-
-                    const harusnya =
-                        Math.max(
-                            0,
-                            masak -
-                            terjual
-                        );
-
-
-                    const fisikValue =
-                        getSisaFisik(
-                            jenis
-                        );
-
-
-                    const fisik =
-                        fisikValue === ''
-                            ? null
-                            : Math.max(
-                                0,
-                                safeNumber(
-                                    fisikValue,
-                                    0
-                                )
-                            );
-
-
-                    const selisih =
-                        fisik === null
-                            ? null
-                            : fisik -
-                              harusnya;
-
-
-                    totalMasak +=
-                        masak;
-
-                    totalTerjual +=
-                        terjual;
-
-                    totalHarusnya +=
-                        harusnya;
-
-
-                    if (
-                        fisik !== null
-                    ) {
-
-                        adaFisik =
-                            true;
-
-                        totalFisik +=
-                            fisik;
-
-                        totalSelisih +=
-                            selisih;
-
-                    }
-
-
-                    let warna =
-                        'text-gray-300';
-
-
-                    if (
-                        selisih !== null
-                    ) {
-
-                        if (
-                            selisih === 0
-                        ) {
-
-                            warna =
-                                'text-green-600';
-
-                        }
-
-                        else if (
-                            selisih < 0
-                        ) {
-
-                            warna =
-                                'text-red-500';
-
-                        }
-
-                        else {
-
-                            warna =
-                                'text-blue-600';
-
-                        }
-
-                    }
-
-
-                    const teks =
-                        selisih === null
-                            ? '-'
-                            : (
-                                selisih > 0
-                                    ? `+${selisih}`
-                                    : `${selisih}`
-                            );
-
-
-                    return `
-
-                        <tr class="border-t border-gray-50">
-
-                            <td class="p-2 font-semibold text-gray-700">
-                                ${escapeHTML(
-                                    jenis
-                                )}
-                            </td>
-
-
-                            <td class="p-2 text-right">
-                                ${masak}
-                            </td>
-
-
-                            <td class="p-2 text-right">
-                                ${terjual}
-                            </td>
-
-
-                            <td class="p-2 text-right">
-                                ${harusnya}
-                            </td>
-
-
-                            <td class="p-2 text-right">
-
-                                <input
-                                    type="number"
-                                    min="0"
-                                    value="${
-                                        fisikValue === ''
-                                            ? ''
-                                            : fisikValue
-                                    }"
-                                    onchange="ubahSisaFisik('${escapeHTML(
-                                        jenis
-                                    )}', this.value)"
-                                    class="w-14 border border-gray-200 rounded px-1 py-0.5 text-right text-xs"
-                                >
-
-                            </td>
-
-
-                            <td class="p-2 text-right font-bold ${warna}">
-                                ${teks}
-                            </td>
-
-                        </tr>
-
-                    `;
-
-                }
-            )
-            .join('');
-
-
-    const totalText =
-        !adaFisik
-            ? '-'
-            : (
-                totalSelisih > 0
-                    ? `+${totalSelisih}`
-                    : `${totalSelisih}`
-            );
-
-
-    const totalColor =
-        !adaFisik
-            ? 'text-gray-300'
-            : (
-                totalSelisih === 0
-                    ? 'text-green-600'
-                    : (
-                        totalSelisih < 0
-                            ? 'text-red-500'
-                            : 'text-blue-600'
-                    )
-            );
-
-
-    tbody.innerHTML =
-        rows +
-        `
-
-            <tr class="border-t-2 border-gray-200 bg-gray-50 font-bold">
-
-                <td class="p-2">
-                    Total
-                </td>
-
-                <td class="p-2 text-right">
-                    ${totalMasak}
-                </td>
-
-                <td class="p-2 text-right">
-                    ${totalTerjual}
-                </td>
-
-                <td class="p-2 text-right">
-                    ${totalHarusnya}
-                </td>
-
-                <td class="p-2 text-right">
-                    ${
-                        adaFisik
-                            ? totalFisik
-                            : '-'
-                    }
-                </td>
-
-                <td class="p-2 text-right ${totalColor}">
-                    ${totalText}
-                </td>
-
-            </tr>
-
-        `;
-
-}
-
-
-// ============================================================
-// ARSIP STOCK
-// ============================================================
-
-const SK_KASIR_ARCHIVE =
-    'bobby_riwayat_archive';
-
-
-function getKasirArchive() {
-
-    const archive =
-        loadJSON(
-            SK_KASIR_ARCHIVE,
-            []
-        );
-
-
-    return Array.isArray(
-        archive
-    )
-        ? archive
-        : [];
-
-}
-
-
-function buildStockArchiveSnapshot(
-    tanggal = todayKey()
-) {
-
-    const transaksiMasuk =
-        getTransaksiMasukTanggal(
-            tanggal
-        );
-
-
-    const transaksiKeluar =
-        getTransaksiKeluarTanggal(
-            tanggal
-        );
-
-
-    const transaksiMasak =
-        getTransaksiMasakTanggal(
-            tanggal
-        );
-
-
-    const bahan =
-        bahanBakuList.map(
-            material => {
-
-                const pembelian =
-                    hitungPembelian(
-                        material.id,
-                        tanggal
-                    );
-
-
-                const pengembalian =
-                    hitungPengembalian(
-                        material.id,
-                        tanggal
-                    );
-
-
-                const masuk =
-                    pembelian +
-                    pengembalian;
-
-
-                const keluar =
-                    hitungKeluar(
-                        material.id,
-                        tanggal
-                    );
-
-
-                const masak =
-                    hitungMasakBahan(
-                        material.id,
-                        tanggal
-                    );
-
-
-                const saldoAkhir =
-                    hitungStokUtama(
-                        material.id
-                    );
-
-
-                const saldoAwal =
-                    Math.max(
-                        0,
-                        saldoAkhir -
-                        pembelian -
-                        pengembalian +
-                        keluar
-                    );
-
-
-                const lapanganAkhir =
-                    hitungStokLapanganMentah(
-                        material.id,
-                        tanggal
-                    );
-
-
-                return {
-
-                    id:
-                        material.id,
-
-                    nama:
-                        material.nama,
-
-                    satuan:
-                        material.satuan,
-
-                    saldoAwal,
-
-                    pembelian,
-
-                    pengembalian,
-
-                    masuk,
-
-                    keluar,
-
-                    masak,
-
-                    stokGudang:
-                        saldoAkhir,
-
-                    stokLapangan:
-                        lapanganAkhir
-
-                };
-
-            }
-        );
-
-
-    const fisik =
-        sisaFisikHarian[
-            tanggal
-        ]
-            ? {
-                ...sisaFisikHarian[
-                    tanggal
-                ]
-            }
-            : {};
-
-
-    return {
-
-        tanggal,
-
-        tanggalDisplay:
-            formatTanggalIndonesia(
-                tanggal
-            ),
-
-        bahan,
-
-        transaksi: {
-
-            masuk:
-                transaksiMasuk.map(
-                    transaction => ({
-
-                        id:
-                            transaction.id,
-
-                        bahanBakuId:
-                            transaction.bahanBakuId,
-
-                        jumlah:
-                            safeNumber(
-                                transaction.jumlah,
-                                0
-                            ),
-
-                        harga:
-                            safeNumber(
-                                transaction.harga,
-                                0
-                            ),
-
-                        catatan:
-                            safeString(
-                                transaction.catatan
-                            ),
-
-                        tipe:
-                            safeString(
-                                transaction.tipe
-                            ),
-
-                        tanggal:
-                            transaction.tanggal
-
-                    })
-                ),
-
-            keluar:
-                transaksiKeluar.map(
-                    transaction => ({
-
-                        id:
-                            transaction.id,
-
-                        bahanBakuId:
-                            transaction.bahanBakuId,
-
-                        jumlah:
-                            safeNumber(
-                                transaction.jumlah,
-                                0
-                            ),
-
-                        catatan:
-                            safeString(
-                                transaction.catatan
-                            ),
-
-                        tanggal:
-                            transaction.tanggal
-
-                    })
-                ),
-
-            masak:
-                transaksiMasak.map(
-                    transaction => ({
-
-                        id:
-                            transaction.id,
-
-                        bahanBakuId:
-                            transaction.bahanBakuId,
-
-                        jumlahDiproses:
-                            safeNumber(
-                                transaction.jumlahDiproses,
-                                0
-                            ),
-
-                        hasil:
-                            Array.isArray(
-                                transaction.hasil
-                            )
-                                ? transaction.hasil
-                                : [],
-
-                        tanggal:
-                            transaction.tanggal
-
-                    })
-                )
-
-        },
-
-        fisik
-
-    };
-
-}
-
-
-// ============================================================
-// CEK DATA STOCK HARI INI
-// ============================================================
-
-function adaDataStockHariIni(
-    tanggal = todayKey()
-) {
-
-    return (
-
-        stokMasukList.some(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal
-        ) ||
-
-        stokKeluarList.some(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal
-        ) ||
-
-        stokMasakList.some(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) ===
-                tanggal
-        ) ||
-
-        Boolean(
-            sisaFisikHarian[
-                tanggal
-            ]
-        )
-
-    );
-
-}
-
-
-// ============================================================
-// BERSIHKAN TRANSAKSI STOCK HARI INI
-// ============================================================
-//
-// SALDO GUDANG TIDAK DISENTUH.
-// ============================================================
-
-function clearStockHariIni(
-    tanggal = todayKey()
-) {
-
-    stokMasukList =
-        stokMasukList.filter(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) !==
-                tanggal
-        );
-
-
-    stokKeluarList =
-        stokKeluarList.filter(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) !==
-                tanggal
-        );
-
-
-    stokMasakList =
-        stokMasakList.filter(
-            transaction =>
-                transaksiTanggal(
-                    transaction
-                ) !==
-                tanggal
-        );
-
-
-    delete sisaFisikHarian[
-        tanggal
-    ];
-
-
-    saveJSON(
-        SK_MASUK,
-        stokMasukList
-    );
-
-    saveJSON(
-        SK_KELUAR,
-        stokKeluarList
-    );
-
-    saveJSON(
-        SK_MASAK,
-        stokMasakList
-    );
-
-    saveJSON(
-        SK_SISA_FISIK,
-        sisaFisikHarian
-    );
-
-
-    // SALDO GUDANG SENGAJA TIDAK DIHAPUS.
-    simpanSaldoGudang();
-
-}
-
-
-// ============================================================
-// DETAIL STOCK ARSIP
-// ============================================================
-
-function buildStockArchiveHtml(
-    stock
-) {
-
-    if (!stock) {
-
-        return '';
-
-    }
-
-
-    let html = `
-
-        <div class="mt-5">
-
-            <p class="text-xs font-black text-red-600 uppercase tracking-wide mb-3">
-                Laporan Stock
-            </p>
-
-    `;
-
-
-    stock.bahan.forEach(
-        material => {
-
-            const adaAktivitas =
-                material.pembelian > 0 ||
-                material.pengembalian > 0 ||
-                material.keluar > 0 ||
-                material.masak > 0;
-
-
-            if (
-                !adaAktivitas
-            ) {
-
-                return;
-
-            }
-
-
-            html += `
-
-                <div class="border border-gray-100 rounded-xl p-3 mb-2">
-
-                    <div class="flex justify-between items-start gap-2">
-
-                        <p class="font-bold text-sm text-gray-800">
-                            ${escapeHTML(
-                                material.nama
-                            )}
-                        </p>
-
-
-                        <p class="text-[10px] text-gray-400">
-                            ${escapeHTML(
-                                material.satuan
-                            )}
-                        </p>
-
-                    </div>
-
-
-                    <div class="grid grid-cols-2 gap-2 mt-2">
-
-                        <div class="bg-gray-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-gray-400">
-                                Stok Awal
-                            </p>
-
-                            <p class="font-black text-sm text-gray-700">
-                                ${material.saldoAwal}
-                            </p>
-
-                        </div>
-
-
-                        <div class="bg-gray-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-gray-400">
-                                Stok Akhir
-                            </p>
-
-                            <p class="font-black text-sm text-gray-700">
-                                ${material.stokGudang}
-                            </p>
-
-                        </div>
-
-
-                        <div class="bg-green-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-green-600">
-                                Beli
-                            </p>
-
-                            <p class="font-bold text-sm text-green-700">
-                                +${material.pembelian}
-                            </p>
-
-                        </div>
-
-
-                        <div class="bg-blue-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-blue-600">
-                                Kembali
-                            </p>
-
-                            <p class="font-bold text-sm text-blue-700">
-                                +${material.pengembalian}
-                            </p>
-
-                        </div>
-
-
-                        <div class="bg-orange-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-orange-600">
-                                Keluar
-                            </p>
-
-                            <p class="font-bold text-sm text-orange-700">
-                                -${material.keluar}
-                            </p>
-
-                        </div>
-
-
-                        <div class="bg-red-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-red-600">
-                                Masak
-                            </p>
-
-                            <p class="font-bold text-sm text-red-700">
-                                ${material.masak}
-                            </p>
-
-                        </div>
-
-                    </div>
-
-
-                    <div class="grid grid-cols-2 gap-2 mt-2">
-
-                        <div class="bg-gray-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-gray-400">
-                                Gudang Akhir
-                            </p>
-
-                            <p class="font-black text-sm text-gray-700">
-                                ${material.stokGudang}
-                                ${escapeHTML(
-                                    material.satuan
-                                )}
-                            </p>
-
-                        </div>
-
-
-                        <div class="bg-gray-50 rounded-lg p-2">
-
-                            <p class="text-[10px] text-gray-400">
-                                Lapangan Akhir
-                            </p>
-
-                            <p class="font-black text-sm text-gray-700">
-                                ${material.stokLapangan}
-                                ${escapeHTML(
-                                    material.satuan
-                                )}
-                            </p>
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-            `;
-
-        }
-    );
-
-
-    html += `
-
-        <div class="mt-4">
-
-            <p class="text-[11px] font-black text-gray-500 uppercase mb-2">
-                Detail Transaksi Stock
-            </p>
-
-    `;
-
-
-    const detailRows =
-        [];
-
-
-    (
-        stock.transaksi?.masuk ||
-        []
-    ).forEach(
-        transaction => {
-
-            detailRows.push({
-
-                ...transaction,
-
-                jumlah:
-                    safeNumber(
-                        transaction.jumlah,
-                        0
-                    ),
-
-                label:
-                    transaction.tipe ===
-                        'pengembalian'
-                        ? 'Pengembalian'
-                        : 'Masuk',
-
-                sign:
-                    '+',
-
-                color:
-                    transaction.tipe ===
-                        'pengembalian'
-                        ? 'text-blue-600'
-                        : 'text-green-600'
-
-            });
-
-        }
-    );
-
-
-    (
-        stock.transaksi?.keluar ||
-        []
-    ).forEach(
-        transaction => {
-
-            detailRows.push({
-
-                ...transaction,
-
-                label:
-                    'Keluar',
-
-                sign:
-                    '-',
-
-                color:
-                    'text-orange-500'
-
-            });
-
-        }
-    );
-
-
-    (
-        stock.transaksi?.masak ||
-        []
-    ).forEach(
-        transaction => {
-
-            detailRows.push({
-
-                ...transaction,
-
-                jumlah:
-                    safeNumber(
-                        transaction.jumlahDiproses,
-                        0
-                    ),
-
-                label:
-                    'Masak',
-
-                sign:
-                    '-',
-
-                color:
-                    'text-red-600'
-
-            });
-
-        }
-    );
-
-
-    detailRows.forEach(
-        transaction => {
-
-            const bahan =
-                stock.bahan.find(
-                    material =>
-                        String(
-                            material.id
-                        ) ===
-                        String(
-                            transaction.bahanBakuId
-                        )
-                );
-
-
-            const nama =
-                bahan
-                    ? bahan.nama
-                    : 'Bahan';
-
-
-            const satuan =
-                bahan
-                    ? bahan.satuan
-                    : 'unit';
-
-
-            html += `
-
-                <div class="flex justify-between py-2 border-b border-gray-50 text-xs">
-
-                    <span class="text-gray-600">
-
-                        ${escapeHTML(
-                            transaction.label
-                        )}
-
-                        ·
-
-                        ${escapeHTML(
-                            nama
-                        )}
-
-                    </span>
-
-
-                    <span class="font-bold ${transaction.color}">
-
-                        ${transaction.sign}${transaction.jumlah}
-
-                        ${escapeHTML(
-                            satuan
-                        )}
-
-                    </span>
-
-                </div>
-
-            `;
-
-        }
-    );
-
-
-    html += `
-
-        </div>
-
-    `;
-
-
-    html += `
-
-        </div>
-
-    `;
-
-
-    return html;
-
-}
-
-
-// ============================================================
-// RESET TERPADU
-// ============================================================
-//
-// INI YANG DIPAKAI TOMBOL "RESET HARI INI".
-//
-// Yang diarsipkan:
-// - Kasir
-// - QRIS
-// - Setoran
-// - Stock masuk
-// - Stock keluar
-// - Masak
-// - Pengembalian
-// - Stok awal gudang
-// - Stok akhir gudang
-//
-// Yang di-reset:
-// - Kasir
-// - QRIS
-// - transaksi stock hari ini
-// - rekonsiliasi fisik hari ini
-//
-// Yang TIDAK di-reset:
-// - Master bahan
-// - Resep
-// - Mapping
-// - SALDO GUDANG
-// ============================================================
-
-function resetDataTerpadu() {
-
-    const tanggal =
-        todayKey();
-
-
-    const adaKasir =
-        typeof state !==
-            'undefined' &&
-        state &&
-        (
-            (
-                state.log &&
-                state.log.length > 0
-            ) ||
-
-            (
-                state.items &&
-                Object.values(
-                    state.items
-                ).some(
-                    qty =>
-                        safeNumber(
-                            qty,
-                            0
-                        ) > 0
-                )
-            ) ||
-
-            safeNumber(
-                state.qris,
-                0
-            ) > 0
-        );
-
-
-    const adaStock =
-        adaDataStockHariIni(
-            tanggal
-        );
-
-
-    if (
-        !adaKasir &&
-        !adaStock
-    ) {
-
-        alert(
-            'Belum ada data hari ini yang bisa di-reset.'
-        );
-
-        return;
-
-    }
-
-
-    const yakin =
-        confirm(
-            'RESET HARI INI?\n\nData Kasir + QRIS + Stok Masuk + Stok Keluar + Masak + Pengembalian + Rekonsiliasi akan masuk Arsip terlebih dahulu.\n\nStok Gudang yang masih tersisa TIDAK akan hilang. Stok tersebut menjadi saldo awal untuk hari berikutnya.\n\nMaster Bahan Baku, Resep, dan Mapping tetap aman.'
-        );
-
-
-    if (!yakin) {
-
-        return;
-
-    }
-
-
-    // ========================================================
-    // HASIL KASIR
-    // ========================================================
-
-    let hasilKasir = {
-
-        total:
-            0,
-
-        qris:
-            0,
-
-        setoran:
-            0
-
-    };
-
-
-    if (
-        typeof calculateTotal ===
-            'function'
-    ) {
-
-        try {
-
-            hasilKasir =
-                calculateTotal() || hasilKasir;
-
-        } catch (error) {
-
-            console.error(
-                '[STOCK] Gagal mengambil hasil kasir:',
-                error
-            );
-
-        }
-
-    }
-
-
-    // ========================================================
-    // STOCK SNAPSHOT SEBELUM DIHAPUS
-    // ========================================================
-
-    const stockSnapshot =
-        adaStock
-            ? buildStockArchiveSnapshot(
-                tanggal
-            )
-            : null;
-
-
-    // ========================================================
-    // ARCHIVE KASIR LAMA
-    // ========================================================
-
-    const archive =
-        getKasirArchive();
-
-
-    let tanggalDisplay =
-        tanggal;
-
-
-    const tanggalEl =
-        getElement(
-            'tanggalHariIni'
-        );
-
-
-    if (
-        tanggalEl &&
-        tanggalEl.innerText
-    ) {
-
-        tanggalDisplay =
-            tanggalEl.innerText;
-
-    }
-
-
-    archive.push({
-
-        tanggal:
-            tanggalDisplay,
-
-        tanggalKey:
-            tanggal,
-
-        timestamp:
-            new Date().toISOString(),
-
-        total:
-            safeNumber(
-                hasilKasir.total,
-                0
-            ),
-
-        qris:
-            safeNumber(
-                hasilKasir.qris,
-                0
-            ),
-
-        setoran:
-            safeNumber(
-                hasilKasir.setoran,
-                0
-            ),
-
-        items:
-            typeof state !==
-                'undefined' &&
-            state &&
-            state.items
-                ? {
-                    ...state.items
-                }
-                : {},
-
-        log:
-            typeof state !==
-                'undefined' &&
-            state &&
-            Array.isArray(
-                state.log
-            )
-                ? [
-                    ...state.log
-                ]
-                : [],
-
-        stock:
-            stockSnapshot
-
-    });
-
-
-    saveJSON(
-        SK_KASIR_ARCHIVE,
-        archive
-    );
-
-
-    // ========================================================
-    // RESET KASIR
-    // ========================================================
-
-    if (
-        typeof state !==
-            'undefined'
-    ) {
-
-        state = {
-
-            items: {},
-
-            log: [],
-
-            qris: 0
-
+// ==============================
+// RESET & ARSIP STOCK (dipanggil bareng "Reset Hari Ini" di Kasir)
+// Bahan Baku (definisi) TIDAK direset, cuma data transaksionalnya.
+// ==============================
+function resetStockHarian() {
+    const adaData = stokMasukList.length || stokKeluarList.length || stokMasakList.length || stokReturList.length;
+    if (!adaData) return;
+
+    const tanggalEl = document.getElementById('tanggalHariIni');
+    const tanggalDisplay = tanggalEl ? tanggalEl.innerText : new Date().toLocaleDateString('id-ID');
+
+    const ringkasanBahan = bahanBakuList.map(b => {
+        const totalMasuk = stokMasukList.filter(x => x.bahanBakuId === b.id).reduce((s, x) => s + x.jumlah, 0);
+        const totalRetur = stokReturList.filter(x => x.bahanBakuId === b.id).reduce((s, x) => s + x.jumlah, 0);
+        const totalKeluar = stokKeluarList.filter(x => x.bahanBakuId === b.id).reduce((s, x) => s + x.jumlah, 0);
+        const totalDimasak = stokMasakList.filter(x => x.bahanBakuId === b.id).reduce((s, x) => s + x.jumlahDiproses, 0);
+        const pengeluaran = stokMasukList.filter(x => x.bahanBakuId === b.id).reduce((s, x) => s + (x.jumlah * (x.harga || 0)), 0);
+
+        return {
+            nama: b.nama, satuan: b.satuan,
+            totalMasuk, totalRetur, totalKeluar, totalDimasak,
+            stokAkhirGudang: totalMasuk + totalRetur - totalKeluar,
+            stokAkhirLapangan: totalKeluar - totalRetur - totalDimasak,
+            pengeluaran
         };
+    });
 
+    const ringkasanRekonsiliasi = getJenisProdukList().map(jenis => {
+        const masak = getStokMasakSaatIni(jenis);
+        const terjual = getPenjualanTercatat(jenis);
+        const harusnya = masak - terjual;
+        const fisikVal = getSisaFisik(jenis);
+        const fisik = fisikVal === '' ? null : Number(fisikVal);
+        const selisih = fisik === null ? null : (fisik - harusnya);
+        return { jenis, masak, terjual, harusnya, fisik, selisih };
+    });
 
-        if (
-            typeof saveState ===
-                'function'
-        ) {
+    stockArchiveList.push({
+        tanggal: tanggalDisplay,
+        timestamp: new Date().toISOString(),
+        totalPengeluaran: hitungPengeluaranSaatIni(),
+        bahanBaku: ringkasanBahan,
+        rekonsiliasi: ringkasanRekonsiliasi
+    });
+    saveJSON(SK_STOCK_ARCHIVE, stockArchiveList);
 
-            saveState();
+    // Reset data transaksional, TAPI bawa sisa Gudang & Lapangan (kalau masih ada) jadi saldo awal
+    // periode baru -- biar gak perlu itung ulang / double check tiap reset. Sisa 0 ya tetap 0.
+    const tanggalBaru = todayKey();
+    const masukBaru = [];
+    const keluarBaru = [];
 
-        } else {
+    bahanBakuList.forEach((b, idx) => {
+        const ringkasan = ringkasanBahan[idx];
+        const sisaGudang = Math.max(0, ringkasan.stokAkhirGudang);
+        const sisaLapangan = Math.max(0, ringkasan.stokAkhirLapangan);
+        const totalBawa = sisaGudang + sisaLapangan;
 
-            saveJSON(
-                'bobby_state',
-                state
-            );
-
+        if (totalBawa > 0) {
+            masukBaru.push({
+                id: 'in_' + Date.now() + '_' + b.id,
+                bahanBakuId: b.id,
+                jumlah: totalBawa,
+                tanggal: tanggalBaru,
+                harga: 0, // saldo bawaan, bukan pembelian baru -- gak dihitung pengeluaran
+                catatan: 'Saldo awal (sisa dari periode sebelumnya)',
+                timestamp: new Date().toISOString()
+            });
         }
+        if (sisaLapangan > 0) {
+            keluarBaru.push({
+                id: 'out_' + Date.now() + '_' + b.id,
+                bahanBakuId: b.id,
+                jumlah: sisaLapangan,
+                tanggal: tanggalBaru,
+                catatan: 'Saldo awal (sisa dari periode sebelumnya)',
+                timestamp: new Date().toISOString()
+            });
+        }
+    });
 
-    }
+    stokMasukList = masukBaru;
+    stokKeluarList = keluarBaru;
 
+    // Sisa fisik potongan (Dada/Sayap/dll) yang masih ada, dibawa jadi stok Masak awal
+    // periode baru -- siap dijual lagi. Cuma yang emang KEISI angka Sisa Fisik-nya
+    // (bukan yang dikosongin) yang dibawa, biar gak nebak-nebak.
+    const masakBaru = [];
+    ringkasanRekonsiliasi.forEach(r => {
+        if (r.fisik !== null && r.fisik > 0) {
+            masakBaru.push({
+                id: 'sm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                bahanBakuId: null, // gak nempel ke bahan baku tertentu, ini murni saldo potongan sisa
+                jumlahDiproses: 0,
+                tanggal: tanggalBaru,
+                timestamp: new Date().toISOString(),
+                hasil: [{ jenisProduk: r.jenis, jumlah: r.fisik }],
+                catatan: 'Saldo awal (sisa fisik dari periode sebelumnya)'
+            });
+        }
+    });
+    stokMasakList = masakBaru;
 
-    // ========================================================
-    // RESET TRANSAKSI STOCK HARI INI
-    //
-    // SALDO GUDANG TETAP.
-    // ========================================================
+    stokReturList = [];
+    sisaFisikSaatIni = {};
 
-    clearStockHariIni(
-        tanggal
-    );
-
-
-    // ========================================================
-    // RENDER KASIR
-    // ========================================================
-
-    if (
-        typeof renderMenu ===
-            'function'
-    ) {
-
-        renderMenu();
-
-    }
-
-
-    if (
-        typeof renderRiwayatHariIni ===
-            'function'
-    ) {
-
-        renderRiwayatHariIni();
-
-    }
-
-
-    if (
-        typeof calculateTotal ===
-            'function'
-    ) {
-
-        calculateTotal();
-
-    }
-
-
-    // ========================================================
-    // RENDER STOCK
-    // ========================================================
+    saveJSON(SK_MASUK, stokMasukList);
+    saveJSON(SK_KELUAR, stokKeluarList);
+    saveJSON(SK_MASAK, stokMasakList);
+    saveJSON(SK_RETUR, stokReturList);
+    saveJSON(SK_SISA_FISIK, sisaFisikSaatIni);
 
     renderSemuaStock();
-
-
-    // ========================================================
-    // RENDER ARSIP
-    // ========================================================
-
-    renderArsipListTerpadu();
-
-
-    alert(
-        'Reset berhasil.\n\nAktivitas hari ini sudah diarsipkan.\nStok gudang yang tersisa tetap dibawa ke hari berikutnya.'
-    );
-
 }
 
+// ==============================
+// ARSIP STOCK (viewer)
+// ==============================
+function bukaModalArsipStock() {
+    bukaModalForm('Arsip Stock', buildArsipStockListHtml());
+}
 
-// ============================================================
-// ARSIP STOCK LIST
-// ============================================================
-
-function renderArsipListTerpadu() {
-
-    const list =
-        getElement(
-            'riwayatArsipList'
-        );
-
-
-    if (!list) {
-
-        return;
-
+function buildArsipStockListHtml() {
+    if (stockArchiveList.length === 0) {
+        return '<p class="text-xs text-gray-400 text-center py-6">Belum ada arsip. Arsip kesimpen otomatis tiap kamu pencet "Reset Hari Ini" di halaman Kasir (kalau ada data stock periode itu).</p>';
     }
-
-
-    const archive =
-        getKasirArchive();
-
-
-    if (
-        archive.length === 0
-    ) {
-
-        list.innerHTML = `
-
-            <p class="text-xs text-gray-400 text-center py-6">
-                Belum ada arsip.
-            </p>
-
+    const items = [...stockArchiveList].reverse();
+    return items.map((entry, idx) => {
+        const realIndex = stockArchiveList.length - 1 - idx;
+        return `
+            <button onclick="tampilkanDetailArsipStock(${realIndex})" class="w-full flex justify-between items-center py-3 border-b border-gray-50 text-left active:bg-gray-50 rounded-lg px-2">
+                <div>
+                    <p class="font-bold text-sm text-gray-800">${entry.tanggal}</p>
+                    <p class="text-[11px] text-gray-400">${entry.bahanBaku.length} bahan baku</p>
+                </div>
+                <span class="font-bold text-sm text-red-600">Rp ${entry.totalPengeluaran.toLocaleString('id-ID')}</span>
+            </button>
         `;
-
-        return;
-
-    }
-
-
-    list.innerHTML =
-        [...archive]
-            .reverse()
-            .map(
-                (
-                    entry,
-                    reverseIndex
-                ) => {
-
-                    const realIndex =
-                        archive.length -
-                        1 -
-                        reverseIndex;
-
-
-                    const total =
-                        safeNumber(
-                            entry.total,
-                            0
-                        );
-
-
-                    const qris =
-                        safeNumber(
-                            entry.qris,
-                            0
-                        );
-
-
-                    const setoran =
-                        safeNumber(
-                            entry.setoran,
-                            Math.max(
-                                0,
-                                total -
-                                qris
-                            )
-                        );
-
-
-                    const kasirLog =
-                        Array.isArray(
-                            entry.log
-                        )
-                            ? entry.log.length
-                            : 0;
-
-
-                    let stockCount =
-                        0;
-
-
-                    if (
-                        entry.stock &&
-                        entry.stock.transaksi
-                    ) {
-
-                        stockCount +=
-                            (
-                                entry.stock.transaksi
-                                    .masuk ||
-                                []
-                            ).length;
-
-
-                        stockCount +=
-                            (
-                                entry.stock.transaksi
-                                    .keluar ||
-                                []
-                            ).length;
-
-
-                        stockCount +=
-                            (
-                                entry.stock.transaksi
-                                    .masak ||
-                                []
-                            ).length;
-
-                    }
-
-
-                    return `
-
-                        <button
-                            onclick="tampilkanDetailArsip(${realIndex})"
-                            class="w-full flex justify-between items-center py-3 border-b border-gray-50 text-left active:bg-gray-50 rounded-lg px-2"
-                        >
-
-                            <div>
-
-                                <p class="font-bold text-sm text-gray-800">
-                                    ${escapeHTML(
-                                        entry.tanggal ||
-                                        '-'
-                                    )}
-                                </p>
-
-
-                                <p class="text-[11px] text-gray-400">
-
-                                    ${kasirLog} transaksi kasir
-
-                                    ${
-                                        entry.stock
-                                            ? ` · ${stockCount} transaksi stock`
-                                            : ''
-                                    }
-
-                                </p>
-
-                            </div>
-
-
-                            <div class="text-right">
-
-                                <p class="font-bold text-sm text-red-600">
-                                    Setoran
-                                </p>
-
-
-                                <p class="font-black text-sm text-gray-900">
-                                    Rp ${setoran.toLocaleString('id-ID')}
-                                </p>
-
-                            </div>
-
-                        </button>
-
-                    `;
-
-                }
-            )
-            .join('');
-
+    }).join('');
 }
 
-
-// ============================================================
-// DETAIL ARSIP
-// ============================================================
-
-function tampilkanDetailArsipTerpadu(
-    index
-) {
-
-    const archive =
-        getKasirArchive();
-
-
-    const entry =
-        archive[
-            index
-        ];
-
-
-    if (!entry) {
-
-        return;
-
-    }
-
-
-    const listEl =
-        getElement(
-            'riwayatArsipList'
-        );
-
-
-    const detailEl =
-        getElement(
-            'riwayatArsipDetail'
-        );
-
-
-    const contentEl =
-        getElement(
-            'riwayatArsipDetailContent'
-        );
-
-
-    if (
-        !listEl ||
-        !detailEl ||
-        !contentEl
-    ) {
-
-        return;
-
-    }
-
-
-    listEl.classList.add(
-        'hidden'
-    );
-
-
-    detailEl.classList.remove(
-        'hidden'
-    );
-
-
-    const total =
-        safeNumber(
-            entry.total,
-            0
-        );
-
-
-    const qris =
-        safeNumber(
-            entry.qris,
-            0
-        );
-
-
-    const setoran =
-        safeNumber(
-            entry.setoran,
-            Math.max(
-                0,
-                total -
-                qris
-            )
-        );
-
-
-    let currentCategory =
-        '';
-
-
-    let produkHtml =
-        '';
-
-
-    let adaProduk =
-        false;
-
-
-    if (
-        typeof menuData !==
-            'undefined' &&
-        Array.isArray(
-            menuData
-        )
-    ) {
-
-        menuData.forEach(
-            item => {
-
-                const qty =
-                    entry.items &&
-                    entry.items[
-                        item.id
-                    ]
-                        ? safeNumber(
-                            entry.items[
-                                item.id
-                            ],
-                            0
-                        )
-                        : 0;
-
-
-                if (
-                    qty <= 0
-                ) {
-
-                    return;
-
-                }
-
-
-                adaProduk =
-                    true;
-
-
-                if (
-                    item.category !==
-                    currentCategory
-                ) {
-
-                    produkHtml += `
-
-                        <p class="text-[11px] font-black text-red-600 uppercase tracking-wide mt-3 mb-1">
-                            ${escapeHTML(
-                                item.category
-                            )}
-                        </p>
-
-                    `;
-
-
-                    currentCategory =
-                        item.category;
-
-                }
-
-
-                const subtotal =
-                    qty *
-                    safeNumber(
-                        item.price,
-                        0
-                    );
-
-
-                produkHtml += `
-
-                    <div class="flex justify-between items-center py-1.5 text-sm">
-
-                        <span class="text-gray-700">
-
-                            ${escapeHTML(
-                                item.name
-                            )}
-
-                            <span class="text-gray-400 font-semibold">
-                                x${qty}
-                            </span>
-
-                        </span>
-
-
-                        <span class="font-semibold text-gray-800">
-                            Rp ${subtotal.toLocaleString('id-ID')}
-                        </span>
-
-                    </div>
-
-                `;
-
-            }
-        );
-
-    }
-
-
-    contentEl.innerHTML = `
-
-        <div>
-
-            <p class="font-bold text-gray-800 mb-3">
-                ${escapeHTML(
-                    entry.tanggal ||
-                    '-'
-                )}
-            </p>
-
-
-            <div class="space-y-2">
-
-                <div class="flex justify-between bg-gray-50 rounded-lg px-3 py-2">
-
-                    <span class="text-xs font-semibold text-gray-500">
-                        Total Omset
-                    </span>
-
-                    <span class="text-sm font-bold text-gray-800">
-                        Rp ${total.toLocaleString('id-ID')}
-                    </span>
-
-                </div>
-
-
-                <div class="flex justify-between bg-gray-50 rounded-lg px-3 py-2">
-
-                    <span class="text-xs font-semibold text-gray-500">
-                        QRIS
-                    </span>
-
-                    <span class="text-sm font-bold text-gray-800">
-                        Rp ${qris.toLocaleString('id-ID')}
-                    </span>
-
-                </div>
-
-
-                <div class="flex justify-between bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-
-                    <span class="text-xs font-bold text-red-700">
-                        Setoran
-                    </span>
-
-                    <span class="text-sm font-black text-red-700">
-                        Rp ${setoran.toLocaleString('id-ID')}
-                    </span>
-
-                </div>
-
-            </div>
-
-
-            ${
-                adaProduk
-                    ? `
-
-                        <div class="mt-4">
-
-                            <p class="text-xs font-black text-red-600 uppercase tracking-wide mb-2">
-                                Penjualan
-                            </p>
-
-                            ${produkHtml}
-
-                        </div>
-
-                    `
-                    : ''
-            }
-
-
-            ${
-                entry.stock
-                    ? buildStockArchiveHtml(
-                        entry.stock
-                    )
-                    : ''
-            }
-
+function tampilkanDetailArsipStock(index) {
+    const entry = stockArchiveList[index];
+    if (!entry) return;
+
+    const bahanHtml = entry.bahanBaku.map(b => `
+        <div class="border-b border-gray-50 py-2">
+            <p class="text-sm font-bold text-gray-700">${b.nama} <span class="text-gray-400 font-normal text-xs">(${b.satuan})</span></p>
+            <p class="text-[11px] text-gray-400">Masuk ${b.totalMasuk} &middot; Retur ${b.totalRetur} &middot; Keluar ${b.totalKeluar} &middot; Dimasak ${b.totalDimasak}</p>
+            <p class="text-[11px] text-gray-500">Sisa Gudang: <span class="font-bold">${b.stokAkhirGudang}</span> &middot; Sisa Lapangan: <span class="font-bold">${b.stokAkhirLapangan}</span> &middot; Pengeluaran: <span class="font-bold text-red-600">Rp ${b.pengeluaran.toLocaleString('id-ID')}</span></p>
         </div>
+    `).join('');
 
+    const rekonHtml = entry.rekonsiliasi.length ? `
+        <table class="w-full text-xs mt-2">
+            <thead><tr class="bg-gray-50 text-gray-500 text-left"><th class="p-1.5">Produk</th><th class="p-1.5 text-right">Masak</th><th class="p-1.5 text-right">Terjual</th><th class="p-1.5 text-right">Harusnya</th><th class="p-1.5 text-right">Fisik</th><th class="p-1.5 text-right">Selisih</th></tr></thead>
+            <tbody>
+                ${entry.rekonsiliasi.map(r => {
+                    const warna = r.selisih === null ? 'text-gray-300' : (r.selisih === 0 ? 'text-green-600' : (r.selisih < 0 ? 'text-red-500' : 'text-blue-600'));
+                    const teks = r.selisih === null ? '-' : (r.selisih > 0 ? `+${r.selisih}` : `${r.selisih}`);
+                    return `<tr class="border-t border-gray-50"><td class="p-1.5">${r.jenis}</td><td class="p-1.5 text-right">${r.masak}</td><td class="p-1.5 text-right">${r.terjual}</td><td class="p-1.5 text-right">${r.harusnya}</td><td class="p-1.5 text-right">${r.fisik === null ? '-' : r.fisik}</td><td class="p-1.5 text-right font-bold ${warna}">${teks}</td></tr>`;
+                }).join('')}
+            </tbody>
+        </table>
+    ` : '<p class="text-[11px] text-gray-400 mt-2">Gak ada data rekonsiliasi.</p>';
+
+    document.getElementById('modalFormBody').innerHTML = `
+        <button onclick="bukaModalArsipStock()" class="text-xs font-bold text-gray-400 mb-3">← Kembali ke daftar arsip</button>
+        <div class="flex justify-between items-center mb-3">
+            <p class="font-bold text-gray-800">${entry.tanggal}</p>
+            <p class="font-bold text-red-600">Rp ${entry.totalPengeluaran.toLocaleString('id-ID')}</p>
+        </div>
+        <p class="text-[11px] font-black text-red-600 uppercase tracking-wide mb-1">Bahan Baku</p>
+        ${bahanHtml}
+        <p class="text-[11px] font-black text-red-600 uppercase tracking-wide mt-3 mb-1">Rekonsiliasi</p>
+        ${rekonHtml}
     `;
-
 }
 
-
-// ============================================================
-// RENDER SEMUA
-// ============================================================
-
-function renderSemuaStock() {
-
-    try {
-
-        renderBahanBakuList();
-
-    } catch (error) {
-
-        console.error(
-            '[STOCK] Error bahan baku:',
-            error
-        );
-
-    }
-
-
-    try {
-
-        renderStokDikembalikan();
-
-    } catch (error) {
-
-        console.error(
-            '[STOCK] Error pengembalian:',
-            error
-        );
-
-    }
-
-
-    try {
-
-        renderRekonsiliasi();
-
-    } catch (error) {
-
-        console.error(
-            '[STOCK] Error rekonsiliasi:',
-            error
-        );
-
-    }
-
-
-    try {
-
-        renderTotalPengeluaran();
-
-    } catch (error) {
-
-        console.error(
-            '[STOCK] Error total:',
-            error
-        );
-
-    }
-
+// ==============================
+// AKSI: MAPPING PRODUK (menu kasir -> jenis produk, bisa lebih dari 1 baris)
+// ==============================
+function tambahMappingRow(menuItemId) {
+    if (!produkMapping[menuItemId]) produkMapping[menuItemId] = [];
+    produkMapping[menuItemId].push({ jenisProduk: '', jumlahPerPorsi: 1 });
+    saveJSON(SK_MAPPING, produkMapping);
+    refreshModalMapping();
 }
 
+function hapusMappingRow(menuItemId, index) {
+    produkMapping[menuItemId].splice(index, 1);
+    if (produkMapping[menuItemId].length === 0) delete produkMapping[menuItemId];
+    saveJSON(SK_MAPPING, produkMapping);
+    refreshModalMapping();
+    renderRekonsiliasi();
+}
 
-// ============================================================
-// MODAL
-// ============================================================
+function updateMappingRowJenis(menuItemId, index, jenisProduk) {
+    produkMapping[menuItemId][index].jenisProduk = jenisProduk;
+    saveJSON(SK_MAPPING, produkMapping);
+    renderRekonsiliasi();
+}
 
-function bukaModalForm(
-    title,
-    bodyHtml
-) {
+function updateMappingRowJumlah(menuItemId, index, jumlah) {
+    produkMapping[menuItemId][index].jumlahPerPorsi = Number(jumlah) || 1;
+    saveJSON(SK_MAPPING, produkMapping);
+    renderRekonsiliasi();
+}
 
-    const titleEl =
-        getElement(
-            'modalFormTitle'
-        );
+// ==============================
+// AKSI: SISA FISIK
+// ==============================
+function ubahSisaFisik(jenis, jumlah) {
+    simpanSisaFisik(jenis, jumlah === '' ? '' : Number(jumlah));
+    renderRekonsiliasi();
+}
 
+// ==============================
+// LAPORAN STOCK KE WHATSAPP (Masuk, Retur & Keluar periode berjalan)
+// ==============================
+function copyLaporanStockToWA() {
+    const tanggalEl = document.getElementById('tanggalHariIni');
+    const tanggalDisplay = tanggalEl ? tanggalEl.innerText : todayKey();
 
-    const bodyEl =
-        getElement(
-            'modalFormBody'
-        );
-
-
-    const modalEl =
-        getElement(
-            'modalForm'
-        );
-
-
-    if (
-        !titleEl ||
-        !bodyEl ||
-        !modalEl
-    ) {
-
-        console.error(
-            '[STOCK] Modal tidak ditemukan.'
-        );
-
+    if (stokMasukList.length === 0 && stokKeluarList.length === 0 && stokReturList.length === 0 && stokMasakList.length === 0) {
+        alert('Belum ada transaksi stok periode ini.');
         return;
-
     }
 
+    let text = `*LAPORAN STOK AYAM BOBBY*\nTanggal: ${tanggalDisplay}\n`;
+    let totalPengeluaran = 0;
 
-    titleEl.innerText =
-        safeString(
-            title
-        );
+    const labelMap = { masuk: 'Masuk', keluar: 'Keluar', masak: 'Masak', retur: 'Retur' };
+    const tandaMap = { masuk: '+', keluar: '-', masak: '-', retur: '+' };
 
+    bahanBakuList.forEach(b => {
+        const riwayat = hitungRiwayatBahanDenganSaldo(b.id).slice().reverse(); // urut lama -> baru buat laporan
+        if (riwayat.length === 0) return;
 
-    bodyEl.innerHTML =
-        safeString(
-            bodyHtml
-        );
+        text += `\n*${b.nama.toUpperCase()}* (${b.satuan})\n`;
 
+        riwayat.forEach(x => {
+            let baris = `- ${labelMap[x.tipe]} ${tandaMap[x.tipe]}${x.jumlah}`;
 
-    modalEl.classList.remove(
-        'hidden'
-    );
+            if (x.tipe === 'masuk') {
+                const subtotal = x.jumlah * (x.harga || 0);
+                totalPengeluaran += subtotal;
+                baris += x.harga ? ` (Rp${subtotal.toLocaleString('id-ID')})` : ' (harga belum diisi)';
+            }
 
+            baris += ` → Gudang: ${x.gudangSetelah}, Lapangan: ${x.lapanganSetelah}`;
+            if (x.catatan) baris += ` — ${x.catatan}`;
+
+            text += baris + '\n';
+        });
+    });
+
+    text += `\n------------------\n`;
+    text += `*TOTAL PENGELUARAN: Rp ${totalPengeluaran.toLocaleString('id-ID')}*`;
+
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Mantap! Laporan stock udah disalin, tinggal paste ke WA.');
+    }).catch(err => {
+        console.error('Gagal copy text: ', err);
+        alert('Gagal menyalin otomatis. Silakan coba lagi.');
+    });
 }
 
+// ==============================
+// MODAL FORM GENERIK
+// ==============================
+function bukaModalForm(title, bodyHtml) {
+    document.getElementById('modalFormTitle').innerText = title;
+    document.getElementById('modalFormBody').innerHTML = bodyHtml;
+    document.getElementById('modalForm').classList.remove('hidden');
+}
 
 function tutupModalForm() {
-
-    const modalEl =
-        getElement(
-            'modalForm'
-        );
-
-
-    if (modalEl) {
-
-        modalEl.classList.add(
-            'hidden'
-        );
-
-    }
-
+    document.getElementById('modalForm').classList.add('hidden');
 }
 
-
-// ============================================================
-// GLOBAL EXPORT
-// ============================================================
-
-window.todayKey =
-    todayKey;
-
-window.getBahanById =
-    getBahanById;
-
-window.hitungStokUtama =
-    hitungStokUtama;
-
-window.hitungStokLapanganMentah =
-    hitungStokLapanganMentah;
-
-window.getJenisProdukList =
-    getJenisProdukList;
-
-window.getStokMasakHariIni =
-    getStokMasakHariIni;
-
-window.getPenjualanTercatat =
-    getPenjualanTercatat;
-
-window.getSisaFisik =
-    getSisaFisik;
-
-window.simpanSisaFisik =
-    simpanSisaFisik;
-
-window.ubahSisaFisik =
-    ubahSisaFisik;
-
-window.hitungPengeluaranHariIni =
-    hitungPengeluaranHariIni;
-
-window.hitungPemasukanHariIni =
-    hitungPemasukanHariIni;
-
-window.renderTotalPengeluaran =
-    renderTotalPengeluaran;
-
-window.copyLaporanStockToWA =
-    copyLaporanStockToWA;
-
-window.tambahBahanBaku =
-    tambahBahanBaku;
-
-window.bukaModalTambahBahan =
-    bukaModalTambahBahan;
-
-window.renderFormBahanBaku =
-    renderFormBahanBaku;
-
-window.submitTambahBahan =
-    submitTambahBahan;
-
-window.bukaModalEditBahan =
-    bukaModalEditBahan;
-
-window.renderFormEditBahan =
-    renderFormEditBahan;
-
-window.submitEditBahan =
-    submitEditBahan;
-
-window.bukaModalStokMasuk =
-    bukaModalStokMasuk;
-
-window.submitStokMasuk =
-    submitStokMasuk;
-
-window.bukaModalEditTransaksiMasuk =
-    bukaModalEditTransaksiMasuk;
-
-window.submitEditTransaksiMasuk =
-    submitEditTransaksiMasuk;
-
-window.bukaModalStokKeluar =
-    bukaModalStokKeluar;
-
-window.submitStokKeluar =
-    submitStokKeluar;
-
-window.bukaModalMasak =
-    bukaModalMasak;
-
-window.prosesMasak =
-    prosesMasak;
-
-window.submitMasak =
-    submitMasak;
-
-window.bukaModalForm =
-    bukaModalForm;
-
-window.tutupModalForm =
-    tutupModalForm;
-
-window.hapusBahanBaku =
-    hapusBahanBaku;
-
-window.bukaModalRiwayatBahan =
-    bukaModalRiwayatBahan;
-
-window.refreshModalRiwayatBahan =
-    refreshModalRiwayatBahan;
-
-window.buildRiwayatBahanHtml =
-    buildRiwayatBahanHtml;
-
-window.hapusTransaksiBahan =
-    hapusTransaksiBahan;
-
-window.ubahStokDikembalikan =
-    ubahStokDikembalikan;
-
-window.getJumlahDikembalikanHariIni =
-    getJumlahDikembalikanHariIni;
-
-window.renderStokDikembalikan =
-    renderStokDikembalikan;
-
-window.tambahMappingRow =
-tambahMappingRow;
-
-window.hapusMappingRow =
-    hapusMappingRow;
-
-window.updateMappingRowJenis =
-    updateMappingRowJenis;
-
-window.updateMappingRowJumlah =
-    updateMappingRowJumlah;
-
-window.bukaModalMapping =
-    bukaModalMapping;
-
-window.refreshModalMapping =
-    refreshModalMapping;
-
-window.buildMappingHtml =
-    buildMappingHtml;
-
-window.renderBahanBakuList =
-    renderBahanBakuList;
-
-window.renderRekonsiliasi =
-    renderRekonsiliasi;
-
-window.renderSemuaStock =
-    renderSemuaStock;
-
-window.buildStockArchiveSnapshot =
-    buildStockArchiveSnapshot;
-
-window.buildStockArchiveHtml =
-    buildStockArchiveHtml;
-
-window.renderArsipList =
-    renderArsipListTerpadu;
-
-window.tampilkanDetailArsip =
-    tampilkanDetailArsipTerpadu;
-
-
-// ============================================================
-// RESET UTAMA
-// ============================================================
-//
-// Karena stock.js dimuat SETELAH script.js,
-// fungsi resetData() yang dipanggil HTML akan memakai
-// fungsi ini.
-//
-// ============================================================
-
-window.resetData =
-    resetDataTerpadu;
-
-
-// ============================================================
-// COPY LAPORAN STOCK
-// ============================================================
-
-function copyLaporanStockToWA() {
-
-    const tanggal =
-        todayKey();
-
-
-    const masukHariIni =
-        getTransaksiMasukTanggal(
-            tanggal
-        );
-
-
-    const keluarHariIni =
-        getTransaksiKeluarTanggal(
-            tanggal
-        );
-
-
-    const masakHariIni =
-        getTransaksiMasakTanggal(
-            tanggal
-        );
-
-
-    if (
-        masukHariIni.length === 0 &&
-        keluarHariIni.length === 0 &&
-        masakHariIni.length === 0
-    ) {
-
-        alert(
-            'Belum ada transaksi stock hari ini.'
-        );
-
+// --- Form: Tambah / Edit Bahan Baku ---
+function bukaModalTambahBahan() {
+    editingBahanBakuId = null;
+    tempNamaBahan = '';
+    tempSatuanBahan = '';
+    tempResep = [];
+    renderFormBahanBaku();
+}
+
+function bukaModalEditBahan(bahanBakuId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
+
+    editingBahanBakuId = bahanBakuId;
+    tempNamaBahan = bahan.nama;
+    tempSatuanBahan = bahan.satuan;
+    tempResep = (bahan.resepKonversi || []).map(r => ({ ...r })); // salinan, biar gak ubah data asli sebelum disimpan
+    renderFormBahanBaku();
+}
+
+function renderFormBahanBaku() {
+    const resepRowsHtml = tempResep.map((r, i) => `
+        <div class="flex gap-2 mb-2 items-center">
+            <input type="text" value="${r.jenisProduk}" onchange="tempResep[${i}].jenisProduk=this.value" placeholder="Nama potongan (mis: Dada)" class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
+            <input type="number" min="0" value="${r.jumlahPerUnit}" onchange="tempResep[${i}].jumlahPerUnit=Number(this.value)" placeholder="Jml" class="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
+            <button onclick="tempResep.splice(${i},1); renderFormBahanBaku();" class="text-red-500 font-bold px-2">✕</button>
+        </div>
+    `).join('');
+
+    const html = `
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Nama Bahan Baku</label>
+            <input id="inputNamaBahan" type="text" value="${tempNamaBahan}" oninput="tempNamaBahan=this.value" placeholder="Contoh: Ayam" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Satuan</label>
+            <input id="inputSatuanBahan" type="text" value="${tempSatuanBahan}" oninput="tempSatuanBahan=this.value" placeholder="Contoh: ekor / kg / liter" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500 block mb-1">Konversi Hasil Olahan (opsional)</label>
+            <p class="text-[11px] text-gray-400 mb-2">Isi kalau bahan ini diproses/dimasak jadi beberapa jenis potongan. Kosongkan kalau bahan langsung dipakai apa adanya (misal minyak, bumbu).</p>
+            <div id="resepRows">${resepRowsHtml}</div>
+            <button onclick="tempResep.push({jenisProduk:'',jumlahPerUnit:1}); renderFormBahanBaku();" class="text-xs font-bold text-red-600 mt-1">+ Tambah Jenis Potongan</button>
+        </div>
+        ${editingBahanBakuId ? '<p class="text-[11px] text-orange-500 mb-2">Catatan: kalau kamu ubah/hapus nama jenis potongan di sini, riwayat stok masak yang udah kepakai nama lama TETAP pakai nama lama (gak ikut berubah).</p>' : ''}
+        <button onclick="submitFormBahanBaku()" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl mt-2">${editingBahanBakuId ? 'Simpan Perubahan' : 'Simpan Bahan Baku'}</button>
+    `;
+    bukaModalForm(editingBahanBakuId ? 'Edit Bahan Baku' : 'Tambah Bahan Baku', html);
+}
+
+function submitFormBahanBaku() {
+    const nama = tempNamaBahan.trim();
+    const satuan = tempSatuanBahan.trim();
+    if (!nama || !satuan) { alert('Nama dan satuan wajib diisi.'); return; }
+
+    const resepValid = tempResep.filter(r => r.jenisProduk && r.jenisProduk.trim() !== '' && r.jumlahPerUnit > 0);
+
+    if (editingBahanBakuId) {
+        const bahan = bahanBakuList.find(b => b.id === editingBahanBakuId);
+        if (bahan) {
+            bahan.nama = nama;
+            bahan.satuan = satuan;
+            bahan.resepKonversi = resepValid;
+            saveJSON(SK_BAHAN, bahanBakuList);
+        }
+        editingBahanBakuId = null;
+        renderSemuaStock();
+    } else {
+        tambahBahanBaku(nama, satuan, resepValid);
+    }
+
+    tutupModalForm();
+}
+
+// --- Form: Stok Masuk ---
+function bukaModalStokMasuk(bahanBakuId, entryId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
+
+    let entry = null;
+    if (entryId) {
+        entry = stokMasukList.find(x => x.id === entryId);
+        if (!entry) return;
+    }
+
+    const html = `
+        <p class="text-sm font-bold text-gray-800 mb-3">${bahan.nama} <span class="text-gray-400 font-normal">(${bahan.satuan})</span></p>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Jumlah Masuk</label>
+            <input id="inputJumlahMasuk" type="number" min="0" value="${entry ? entry.jumlah : ''}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Tanggal</label>
+            <input id="inputTanggalMasuk" type="date" value="${entry ? entry.tanggal : todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Harga (opsional, nanti diatur sendiri)</label>
+            <input id="inputHargaMasuk" type="number" min="0" value="${entry && entry.harga ? entry.harga : ''}" placeholder="Belum wajib diisi" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Catatan (opsional)</label>
+            <input id="inputCatatanMasuk" type="text" value="${entry && entry.catatan ? entry.catatan : ''}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <button onclick="submitStokMasuk('${bahanBakuId}', ${entryId ? `'${entryId}'` : 'null'})" class="w-full bg-green-600 text-white font-bold py-3 rounded-xl mt-2">${entry ? 'Simpan Perubahan' : 'Simpan Stok Masuk'}</button>
+    `;
+    bukaModalForm(entry ? 'Edit Stok Masuk' : 'Catat Stok Masuk', html);
+}
+
+// --- Form: Stok Keluar ---
+function bukaModalStokKeluar(bahanBakuId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
+    const tersedia = hitungStokUtama(bahanBakuId);
+
+    const html = `
+        <p class="text-sm font-bold text-gray-800 mb-1">${bahan.nama} <span class="text-gray-400 font-normal">(${bahan.satuan})</span></p>
+        <p class="text-[11px] text-gray-400 mb-3">Stok gudang tersedia: <span class="font-bold text-gray-700">${tersedia} ${bahan.satuan}</span></p>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Jumlah Keluar</label>
+            <input id="inputJumlahKeluar" type="number" min="0" max="${tersedia}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Tanggal</label>
+            <input id="inputTanggalKeluar" type="date" value="${todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Catatan (opsional)</label>
+            <input id="inputCatatanKeluar" type="text" placeholder="Contoh: dibawa ke gerobak/lapangan" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <button onclick="submitStokKeluar('${bahanBakuId}')" class="w-full bg-orange-500 text-white font-bold py-3 rounded-xl mt-2">Simpan Stok Keluar</button>
+    `;
+    bukaModalForm('Catat Stok Keluar', html);
+}
+
+// --- Form: Masak ---
+function bukaModalMasak(bahanBakuId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
+    const tersedia = hitungStokLapanganMentah(bahanBakuId);
+    const resepHtml = (bahan.resepKonversi || []).map(r => `<p class="text-[11px] text-gray-500">${r.jumlahPerUnit} ${r.jenisProduk} / ${bahan.satuan}</p>`).join('');
+
+    const html = `
+        <p class="text-sm font-bold text-gray-800 mb-1">${bahan.nama}</p>
+        <p class="text-[11px] text-gray-400 mb-2">Stok lapangan (belum diolah): <span class="font-bold text-gray-700">${tersedia} ${bahan.satuan}</span></p>
+        <div class="bg-gray-50 rounded-lg p-2 mb-3">
+            <p class="text-[11px] font-bold text-gray-500 mb-1">Konversi per ${bahan.satuan}:</p>
+            ${resepHtml}
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Jumlah Diproses (${bahan.satuan})</label>
+            <input id="inputJumlahMasak" type="number" min="0" max="${tersedia}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <div class="mb-3">
+            <label class="text-xs font-bold text-gray-500">Tanggal</label>
+            <input id="inputTanggalMasak" type="date" value="${todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+        </div>
+        <button onclick="submitMasak('${bahanBakuId}')" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl mt-2">Proses & Simpan</button>
+    `;
+    bukaModalForm('Proses Masak', html);
+}
+
+// --- Form: Mapping Produk ---
+function bukaModalMapping() {
+    const jenisOptions = getJenisProdukList();
+
+    if (jenisOptions.length === 0) {
+        bukaModalForm('Mapping Produk', `<p class="text-xs text-gray-400 text-center py-6">Belum ada jenis produk. Tambahkan bahan baku dengan konversi hasil olahan dulu di halaman Stock.</p>`);
         return;
-
     }
 
+    if (typeof menuData === 'undefined' || !menuData.length) {
+        bukaModalForm('Mapping Produk', `<p class="text-xs text-gray-400 text-center py-6">Data menu kasir belum ketemu.</p>`);
+        return;
+    }
 
-    let text =
-        `*LAPORAN STOCK AYAM BOBBY*\n`;
-
-    text +=
-        `Tanggal: ${formatTanggalIndonesia(
-            tanggal
-        )}\n\n`;
-
-
-    text +=
-        `*RINGKASAN STOCK*\n`;
-
-
-    bahanBakuList.forEach(
-        bahan => {
-
-            const beli =
-                hitungPembelian(
-                    bahan.id,
-                    tanggal
-                );
-
-
-            const kembali =
-                hitungPengembalian(
-                    bahan.id,
-                    tanggal
-                );
-
-
-            const keluar =
-                hitungKeluar(
-                    bahan.id,
-                    tanggal
-                );
-
-
-            const masak =
-                hitungMasakBahan(
-                    bahan.id,
-                    tanggal
-                );
-
-
-            const gudang =
-                hitungStokUtama(
-                    bahan.id
-                );
-
-
-            const lapangan =
-                hitungStokLapanganMentah(
-                    bahan.id,
-                    tanggal
-                );
-
-
-            if (
-                beli === 0 &&
-                kembali === 0 &&
-                keluar === 0 &&
-                masak === 0
-            ) {
-
-                return;
-
-            }
-
-
-            text +=
-                `\n*${bahan.nama}*\n`;
-
-            text +=
-                `Beli: +${beli} ${bahan.satuan}\n`;
-
-            text +=
-                `Kembali: +${kembali} ${bahan.satuan}\n`;
-
-            text +=
-                `Keluar: -${keluar} ${bahan.satuan}\n`;
-
-            text +=
-                `Masak: ${masak} ${bahan.satuan}\n`;
-
-            text +=
-                `Gudang: ${gudang} ${bahan.satuan}\n`;
-
-            text +=
-                `Lapangan: ${lapangan} ${bahan.satuan}\n`;
-
-        }
-    );
-
-
-    navigator.clipboard
-        .writeText(
-            text
-        )
-        .then(
-            () => {
-
-                alert(
-                    'Laporan stock sudah disalin.'
-                );
-
-            }
-        )
-        .catch(
-            () => {
-
-                fallbackCopyText(
-                    text
-                );
-
-            }
-        );
-
+    bukaModalForm('Mapping Produk ke Kasir', buildMappingHtml(jenisOptions));
 }
 
-
-function fallbackCopyText(
-    text
-) {
-
-    try {
-
-        const textarea =
-            document.createElement(
-                'textarea'
-            );
-
-
-        textarea.value =
-            text;
-
-
-        textarea.style.position =
-            'fixed';
-
-        textarea.style.opacity =
-            '0';
-
-
-        document.body.appendChild(
-            textarea
-        );
-
-
-        textarea.select();
-
-
-        document.execCommand(
-            'copy'
-        );
-
-
-        textarea.remove();
-
-
-        alert(
-            'Laporan stock sudah disalin.'
-        );
-
-    } catch (error) {
-
-        console.error(
-            '[STOCK] Copy error:',
-            error
-        );
-
-
-        alert(
-            'Gagal menyalin laporan.'
-        );
-
-    }
-
+function refreshModalMapping() {
+    const jenisOptions = getJenisProdukList();
+    const body = document.getElementById('modalFormBody');
+    if (body) body.innerHTML = buildMappingHtml(jenisOptions);
 }
 
+function buildMappingHtml(jenisOptions) {
+    const rows = menuData.map(item => {
+        const mappingRows = produkMapping[item.id] || [];
+        const rowsHtml = mappingRows.map((row, idx) => {
+            const options = ['<option value="">- pilih jenis -</option>']
+                .concat(jenisOptions.map(j => `<option value="${j}" ${row.jenisProduk === j ? 'selected' : ''}>${j}</option>`))
+                .join('');
+            return `
+                <div class="flex gap-2 mb-1.5 items-center">
+                    <select onchange="updateMappingRowJenis('${item.id}', ${idx}, this.value)" class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs">${options}</select>
+                    <input type="number" min="1" value="${row.jumlahPerPorsi}" onchange="updateMappingRowJumlah('${item.id}', ${idx}, this.value)" class="w-14 border border-gray-200 rounded-lg px-2 py-1.5 text-xs" placeholder="Qty">
+                    <button onclick="hapusMappingRow('${item.id}', ${idx})" class="text-red-500 font-bold px-1">✕</button>
+                </div>
+            `;
+        }).join('');
 
-window.copyLaporanStockToWA =
-    copyLaporanStockToWA;
+        return `
+            <div class="border-b border-gray-50 py-2">
+                <p class="text-sm font-semibold text-gray-700 mb-1">${item.name}</p>
+                ${rowsHtml || '<p class="text-[11px] text-gray-300 mb-1">Belum dipetakan</p>'}
+                <button onclick="tambahMappingRow('${item.id}')" class="text-[11px] font-bold text-red-600">+ Tambah potongan</button>
+            </div>
+        `;
+    }).join('');
 
+    return `<p class="text-[11px] text-gray-400 mb-3">Tentuin tiap menu di kasir itu jual jenis potongan apa dan berapa pcs per porsi. Untuk menu yang gak konsumsi potongan (nasi, sambal, keju), biarin kosong aja. Untuk menu "Ayam Utuh", tambahkan beberapa baris sekaligus (misal Dada x4, Sayap x2, Paha Atas x2, Paha Bawah x2).</p>${rows}`;
+}
 
-// ============================================================
-// INITIALIZATION
-// ============================================================
+// ==============================
+// RIWAYAT TRANSAKSI PER BAHAN BAKU (hapus satu-satu buat koreksi human error)
+// ==============================
+function hitungRiwayatBahanDenganSaldo(bahanBakuId) {
+    const masuk = stokMasukList.filter(x => x.bahanBakuId === bahanBakuId).map(x => ({ ...x, tipe: 'masuk' }));
+    const keluar = stokKeluarList.filter(x => x.bahanBakuId === bahanBakuId).map(x => ({ ...x, tipe: 'keluar' }));
+    const masak = stokMasakList.filter(x => x.bahanBakuId === bahanBakuId).map(x => ({ ...x, tipe: 'masak', jumlah: x.jumlahDiproses }));
+    const retur = stokReturList.filter(x => x.bahanBakuId === bahanBakuId).map(x => ({ ...x, tipe: 'retur' }));
 
-document.addEventListener(
-    'DOMContentLoaded',
-    () => {
+    // Urutkan dari yang paling lama ke paling baru buat ngitung saldo berjalan
+    const kronologis = [...masuk, ...keluar, ...masak, ...retur].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        try {
+    let gudang = 0, lapangan = 0;
+    kronologis.forEach(x => {
+        if (x.tipe === 'masuk') { gudang += x.jumlah; }
+        else if (x.tipe === 'retur') { gudang += x.jumlah; lapangan -= x.jumlah; }
+        else if (x.tipe === 'keluar') { gudang -= x.jumlah; lapangan += x.jumlah; }
+        else if (x.tipe === 'masak') { lapangan -= x.jumlah; }
+        x.gudangSetelah = gudang;
+        x.lapanganSetelah = lapangan;
+    });
 
-            // Pastikan semua bahan sudah memiliki saldo.
-            bahanBakuList.forEach(
-                bahan => {
+    return kronologis.slice().reverse(); // terbaru di atas buat ditampilin
+}
 
-                    ensureSaldoBahan(
-                        bahan.id
-                    );
+function bukaModalRiwayatBahan(bahanBakuId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return;
+    bukaModalForm(`Riwayat ${bahan.nama}`, buildRiwayatBahanHtml(bahanBakuId));
+}
 
-                }
-            );
+function refreshModalRiwayatBahan(bahanBakuId) {
+    const body = document.getElementById('modalFormBody');
+    if (body) body.innerHTML = buildRiwayatBahanHtml(bahanBakuId);
+}
 
+function buildRiwayatBahanHtml(bahanBakuId) {
+    const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
+    if (!bahan) return '<p class="text-xs text-gray-400 text-center py-6">Bahan baku tidak ditemukan.</p>';
 
-            simpanSaldoGudang();
+    const semua = hitungRiwayatBahanDenganSaldo(bahanBakuId);
 
-
-            renderSemuaStock();
-
-
-            renderArsipListTerpadu();
-
-        } catch (error) {
-
-            console.error(
-                '[STOCK] Initialization error:',
-                error
-            );
-
-        }
-
+    if (semua.length === 0) {
+        return '<p class="text-xs text-gray-400 text-center py-6">Belum ada transaksi buat bahan ini.</p>';
     }
-);
+
+    const labelMap = { masuk: 'Masuk', keluar: 'Keluar', masak: 'Masak', retur: 'Retur' };
+    const warnaMap = { masuk: 'text-green-600', keluar: 'text-orange-500', masak: 'text-red-600', retur: 'text-blue-600' };
+    const tandaMap = { masuk: '+', keluar: '-', masak: '-', retur: '+' };
+
+    return semua.map(x => `
+        <div class="flex justify-between items-center py-2 border-b border-gray-50 text-sm">
+            <div>
+                <p class="font-semibold text-gray-700">${labelMap[x.tipe]} <span class="${warnaMap[x.tipe]} font-bold">${tandaMap[x.tipe]}${x.jumlah} ${bahan.satuan}</span></p>
+                <p class="text-[11px] text-gray-400">${x.tanggal}${x.catatan ? ' &middot; ' + x.catatan : ''}</p>
+                <p class="text-[11px] text-gray-400">→ Gudang: <span class="font-semibold text-gray-600">${x.gudangSetelah}</span> &middot; Lapangan: <span class="font-semibold text-gray-600">${x.lapanganSetelah}</span></p>
+            </div>
+            <button onclick="hapusTransaksiBahan('${bahanBakuId}', '${x.tipe}', '${x.id}')" class="text-red-500 font-bold text-xs px-2 shrink-0">Hapus</button>
+        </div>
+    `).join('');
+}
+
+function hapusTransaksiBahan(bahanBakuId, tipe, id) {
+    if (!confirm('Hapus transaksi ini?')) return;
+
+    if (tipe === 'masuk') {
+        stokMasukList = stokMasukList.filter(x => x.id !== id);
+        saveJSON(SK_MASUK, stokMasukList);
+    } else if (tipe === 'keluar') {
+        stokKeluarList = stokKeluarList.filter(x => x.id !== id);
+        saveJSON(SK_KELUAR, stokKeluarList);
+    } else if (tipe === 'masak') {
+        stokMasakList = stokMasakList.filter(x => x.id !== id);
+        saveJSON(SK_MASAK, stokMasakList);
+    } else if (tipe === 'retur') {
+        stokReturList = stokReturList.filter(x => x.id !== id);
+        saveJSON(SK_RETUR, stokReturList);
+    }
+
+    refreshModalRiwayatBahan(bahanBakuId);
+    renderSemuaStock();
+}
+
+// ==============================
+// RENDER
+// ==============================
+function renderBahanBakuList() {
+    const container = document.getElementById('listBahanBaku');
+    if (!container) return;
+
+    if (bahanBakuList.length === 0) {
+        container.innerHTML = '<p class="text-xs text-gray-400 text-center py-6">Belum ada bahan baku. Tambahkan dulu lewat tombol + Bahan Baku.</p>';
+        return;
+    }
+
+    container.innerHTML = bahanBakuList.map(b => {
+        const stokUtama = hitungStokUtama(b.id);
+        const stokLapangan = hitungStokLapanganMentah(b.id);
+        const bisaMasak = b.resepKonversi && b.resepKonversi.length > 0;
+
+        return `
+            <div class="bg-white rounded-xl border border-gray-100 p-3">
+                <div class="flex justify-between items-start mb-2">
+                    <div>
+                        <p class="font-bold text-sm text-gray-800">${b.nama}</p>
+                        <p class="text-[11px] text-gray-400">Stok Gudang: <span class="font-bold text-gray-700">${stokUtama} ${b.satuan}</span> &middot; Stok Lapangan: <span class="font-bold text-gray-700">${stokLapangan} ${b.satuan}</span></p>
+                    </div>
+                    <div class="flex items-center gap-1 shrink-0">
+                        <button onclick="bukaModalEditBahan('${b.id}')" title="Edit bahan baku" class="w-7 h-7 flex items-center justify-center bg-gray-50 rounded-full text-gray-400 text-xs">✏️</button>
+                        <button onclick="bukaModalRiwayatBahan('${b.id}')" title="Riwayat transaksi" class="w-7 h-7 flex items-center justify-center bg-gray-50 rounded-full text-gray-400 text-xs">📜</button>
+                        <button onclick="hapusBahanBaku('${b.id}')" title="Hapus bahan baku" class="w-7 h-7 flex items-center justify-center bg-red-50 rounded-full text-red-500 text-xs">🗑</button>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <button onclick="bukaModalStokMasuk('${b.id}')" class="text-[11px] font-bold py-1.5 rounded-full bg-green-50 text-green-700">+ Masuk</button>
+                    <button onclick="bukaModalStokKeluar('${b.id}')" class="text-[11px] font-bold py-1.5 rounded-full bg-orange-50 text-orange-700">- Keluar</button>
+                </div>
+                <div class="grid ${bisaMasak ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
+                    ${bisaMasak ? `<button onclick="bukaModalMasak('${b.id}')" class="text-[11px] font-bold py-1.5 rounded-full bg-red-50 text-red-700">Masak</button>` : ''}
+                    <button onclick="bukaModalRetur('${b.id}')" class="text-[11px] font-bold py-1.5 rounded-full bg-blue-50 text-blue-700">↩ Retur</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderRekonsiliasi() {
+    const tbody = document.getElementById('tabelRekonsiliasi');
+    if (!tbody) return;
+
+    const jenisList = getJenisProdukList();
+    if (jenisList.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-gray-400 text-xs">Belum ada jenis produk. Tambah bahan baku dengan konversi hasil olahan dulu.</td></tr>`;
+        return;
+    }
+
+    let totalMasak = 0, totalTerjual = 0, totalHarusnya = 0, totalFisik = 0, totalSelisih = 0;
+
+    const rows = jenisList.map(jenis => {
+        const masak = getStokMasakSaatIni(jenis);
+        const terjual = getPenjualanTercatat(jenis);
+        const harusnya = masak - terjual;
+        const fisikVal = getSisaFisik(jenis);
+        const fisik = fisikVal === '' ? null : Number(fisikVal);
+        const selisih = fisik === null ? null : (fisik - harusnya);
+
+        totalMasak += masak;
+        totalTerjual += terjual;
+        totalHarusnya += harusnya;
+        if (fisik !== null) { totalFisik += fisik; totalSelisih += selisih; }
+
+        const warna = selisih === null ? 'text-gray-300' : (selisih === 0 ? 'text-green-600' : (selisih < 0 ? 'text-red-500' : 'text-blue-600'));
+        const teks = selisih === null ? '-' : (selisih > 0 ? `+${selisih}` : `${selisih}`);
+
+        return `
+            <tr class="border-t border-gray-50">
+                <td class="p-2 font-semibold text-gray-700">${jenis}</td>
+                <td class="p-2 text-right">${masak}</td>
+                <td class="p-2 text-right">${terjual}</td>
+                <td class="p-2 text-right">${harusnya}</td>
+                <td class="p-2 text-right">
+                    <input type="number" value="${fisikVal}" onchange="ubahSisaFisik('${jenis}', this.value)" class="w-14 border border-gray-200 rounded px-1 py-0.5 text-right text-xs">
+                </td>
+                <td class="p-2 text-right font-bold ${warna}">${teks}</td>
+            </tr>
+        `;
+    }).join('');
+
+    const totalTeks = totalSelisih > 0 ? `+${totalSelisih}` : `${totalSelisih}`;
+    const totalWarna = totalSelisih === 0 ? 'text-green-600' : (totalSelisih < 0 ? 'text-red-500' : 'text-blue-600');
+
+    const rowTotal = `
+        <tr class="border-t-2 border-gray-200 bg-gray-50 font-bold">
+            <td class="p-2">Total</td>
+            <td class="p-2 text-right">${totalMasak}</td>
+            <td class="p-2 text-right">${totalTerjual}</td>
+            <td class="p-2 text-right">${totalHarusnya}</td>
+            <td class="p-2 text-right">${totalFisik}</td>
+            <td class="p-2 text-right ${totalWarna}">${totalTeks}</td>
+        </tr>
+    `;
+
+    tbody.innerHTML = rows + rowTotal;
+}
+
+function renderTotalPengeluaran() {
+    const el = document.getElementById('totalPengeluaranStock');
+    if (!el) return;
+    el.innerText = 'Rp ' + hitungPengeluaranSaatIni().toLocaleString('id-ID');
+}
+
+function renderSemuaStock() {
+    renderBahanBakuList();
+    renderRekonsiliasi();
+    renderTotalPengeluaran();
+}
