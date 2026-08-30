@@ -153,7 +153,7 @@ function hapusBahanBaku(bahanBakuId) {
 // ==============================
 // AKSI: STOK MASUK
 // ==============================
-function submitStokMasuk(bahanBakuId) {
+function submitStokMasuk(bahanBakuId, entryId) {
     const jumlah = Number(document.getElementById('inputJumlahMasuk').value);
     const tanggal = document.getElementById('inputTanggalMasuk').value || todayKey();
     const harga = Number(document.getElementById('inputHargaMasuk').value) || 0;
@@ -161,121 +161,176 @@ function submitStokMasuk(bahanBakuId) {
 
     if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
 
-    stokMasukList.push({
-        id: 'in_' + Date.now(),
-        bahanBakuId, jumlah, tanggal, harga, catatan,
-        timestamp: new Date().toISOString()
-    });
-    saveJSON(SK_MASUK, stokMasukList);
-    renderSemuaStock();
-    tutupModalForm();
+    if (entryId) {
+        const entry = stokMasukList.find(x => x.id === entryId);
+        if (entry) {
+            entry.jumlah = jumlah;
+            entry.tanggal = tanggal;
+            entry.harga = harga;
+            entry.catatan = catatan;
+            saveJSON(SK_MASUK, stokMasukList);
+        }
+        renderSemuaStock();
+        bukaModalRiwayatBahan(bahanBakuId);
+    } else {
+        stokMasukList.push({
+            id: 'in_' + Date.now(),
+            bahanBakuId, jumlah, tanggal, harga, catatan,
+            timestamp: new Date().toISOString()
+        });
+        saveJSON(SK_MASUK, stokMasukList);
+        renderSemuaStock();
+        tutupModalForm();
+    }
 }
 
 // ==============================
 // AKSI: STOK KELUAR
 // ==============================
-function submitStokKeluar(bahanBakuId) {
+function submitStokKeluar(bahanBakuId, entryId) {
     const jumlah = Number(document.getElementById('inputJumlahKeluar').value);
     const tanggal = document.getElementById('inputTanggalKeluar').value || todayKey();
     const catatan = document.getElementById('inputCatatanKeluar').value.trim();
-    const tersedia = hitungStokUtama(bahanBakuId);
+
+    let entry = null;
+    if (entryId) entry = stokKeluarList.find(x => x.id === entryId);
+
+    const tersediaDasar = hitungStokUtama(bahanBakuId) + (entry ? entry.jumlah : 0);
 
     if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
-    if (jumlah > tersedia) { alert(`Stok gudang cuma tersedia ${tersedia}. Gak bisa keluar lebih dari itu.`); return; }
+    if (jumlah > tersediaDasar) { alert(`Stok gudang cuma tersedia ${tersediaDasar}. Gak bisa keluar lebih dari itu.`); return; }
 
-    stokKeluarList.push({
-        id: 'out_' + Date.now(),
-        bahanBakuId, jumlah, tanggal, catatan,
-        timestamp: new Date().toISOString()
-    });
-    saveJSON(SK_KELUAR, stokKeluarList);
-    renderSemuaStock();
-    tutupModalForm();
+    if (entryId && entry) {
+        entry.jumlah = jumlah;
+        entry.tanggal = tanggal;
+        entry.catatan = catatan;
+        saveJSON(SK_KELUAR, stokKeluarList);
+        renderSemuaStock();
+        bukaModalRiwayatBahan(bahanBakuId);
+    } else {
+        stokKeluarList.push({
+            id: 'out_' + Date.now(),
+            bahanBakuId, jumlah, tanggal, catatan,
+            timestamp: new Date().toISOString()
+        });
+        saveJSON(SK_KELUAR, stokKeluarList);
+        renderSemuaStock();
+        tutupModalForm();
+    }
 }
 
 // ==============================
 // AKSI: RETUR (barang balik ke stok gudang, BUKAN pembelian baru)
 // ==============================
-function bukaModalRetur(bahanBakuId) {
+function bukaModalRetur(bahanBakuId, entryId) {
     const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
     if (!bahan) return;
-    const tersedia = hitungStokLapanganMentah(bahanBakuId);
+
+    let entry = null;
+    if (entryId) {
+        entry = stokReturList.find(x => x.id === entryId);
+        if (!entry) return;
+    }
+
+    const tersediaDasar = hitungStokLapanganMentah(bahanBakuId) + (entry ? entry.jumlah : 0);
 
     const html = `
         <p class="text-sm font-bold text-gray-800 mb-1">${bahan.nama} <span class="text-gray-400 font-normal">(${bahan.satuan})</span></p>
         <p class="text-[11px] text-gray-400 mb-3">Buat catat barang yang balik lagi dari lapangan ke stok gudang — misal Ayam Utuh yang gak jadi kejual / dikembalikan customer. Otomatis ngurangin Stok Lapangan & nambahin Stok Gudang. TIDAK dihitung sebagai pengeluaran baru.</p>
-        <p class="text-[11px] text-gray-400 mb-3">Stok lapangan saat ini: <span class="font-bold text-gray-700">${tersedia} ${bahan.satuan}</span></p>
+        <p class="text-[11px] text-gray-400 mb-3">Stok lapangan saat ini: <span class="font-bold text-gray-700">${tersediaDasar} ${bahan.satuan}</span></p>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Jumlah Kembali</label>
-            <input id="inputJumlahRetur" type="number" min="0" max="${tersedia}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputJumlahRetur" type="number" min="0" max="${tersediaDasar}" value="${entry ? entry.jumlah : ''}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Tanggal</label>
-            <input id="inputTanggalRetur" type="date" value="${todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputTanggalRetur" type="date" value="${entry ? entry.tanggal : todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Catatan</label>
-            <input id="inputCatatanRetur" type="text" placeholder="Contoh: Ayam Utuh gak jadi diambil customer" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputCatatanRetur" type="text" value="${entry && entry.catatan ? entry.catatan : ''}" placeholder="Contoh: Ayam Utuh gak jadi diambil customer" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
-        <button onclick="submitRetur('${bahanBakuId}')" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-2">Simpan Retur</button>
+        <button onclick="submitRetur('${bahanBakuId}', ${entryId ? `'${entryId}'` : 'null'})" class="w-full bg-blue-600 text-white font-bold py-3 rounded-xl mt-2">${entry ? 'Simpan Perubahan' : 'Simpan Retur'}</button>
     `;
-    bukaModalForm('Retur / Barang Kembali', html);
+    bukaModalForm(entry ? 'Edit Retur' : 'Retur / Barang Kembali', html);
 }
 
-function submitRetur(bahanBakuId) {
+function submitRetur(bahanBakuId, entryId) {
     const jumlah = Number(document.getElementById('inputJumlahRetur').value);
     const tanggal = document.getElementById('inputTanggalRetur').value || todayKey();
     const catatan = document.getElementById('inputCatatanRetur').value.trim();
-    const tersedia = hitungStokLapanganMentah(bahanBakuId);
+
+    let entry = null;
+    if (entryId) entry = stokReturList.find(x => x.id === entryId);
+
+    const tersediaDasar = hitungStokLapanganMentah(bahanBakuId) + (entry ? entry.jumlah : 0);
 
     if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
-    if (jumlah > tersedia) { alert(`Stok lapangan cuma tersedia ${tersedia}. Gak bisa retur lebih dari itu.`); return; }
+    if (jumlah > tersediaDasar) { alert(`Stok lapangan cuma tersedia ${tersediaDasar}. Gak bisa retur lebih dari itu.`); return; }
 
-    stokReturList.push({
-        id: 'ret_' + Date.now(),
-        bahanBakuId, jumlah, tanggal, catatan,
-        timestamp: new Date().toISOString()
-    });
-    saveJSON(SK_RETUR, stokReturList);
-    renderSemuaStock();
-    tutupModalForm();
+    if (entryId && entry) {
+        entry.jumlah = jumlah;
+        entry.tanggal = tanggal;
+        entry.catatan = catatan;
+        saveJSON(SK_RETUR, stokReturList);
+        renderSemuaStock();
+        bukaModalRiwayatBahan(bahanBakuId);
+    } else {
+        stokReturList.push({
+            id: 'ret_' + Date.now(),
+            bahanBakuId, jumlah, tanggal, catatan,
+            timestamp: new Date().toISOString()
+        });
+        saveJSON(SK_RETUR, stokReturList);
+        renderSemuaStock();
+        tutupModalForm();
+    }
 }
 
 // ==============================
 // AKSI: STOK MASAK
 // ==============================
-function prosesMasak(bahanBakuId, jumlahDiproses, tanggal) {
+function submitMasak(bahanBakuId, entryId) {
+    const jumlah = Number(document.getElementById('inputJumlahMasak').value);
+    const tanggal = document.getElementById('inputTanggalMasak').value || todayKey();
+    if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
+
     const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
     if (!bahan) return;
 
-    const tersedia = hitungStokLapanganMentah(bahanBakuId);
-    if (jumlahDiproses > tersedia) {
-        alert(`Stok lapangan ${bahan.nama} cuma tersisa ${tersedia} ${bahan.satuan}.`);
+    let entry = null;
+    if (entryId) entry = stokMasakList.find(x => x.id === entryId);
+
+    const tersediaDasar = hitungStokLapanganMentah(bahanBakuId) + (entry ? entry.jumlahDiproses : 0);
+    if (jumlah > tersediaDasar) {
+        alert(`Stok lapangan ${bahan.nama} cuma tersedia ${tersediaDasar} ${bahan.satuan}.`);
         return;
     }
 
     const hasil = (bahan.resepKonversi || []).map(r => ({
         jenisProduk: r.jenisProduk,
-        jumlah: r.jumlahPerUnit * jumlahDiproses
+        jumlah: r.jumlahPerUnit * jumlah
     }));
 
-    stokMasakList.push({
-        id: 'sm_' + Date.now(),
-        bahanBakuId, jumlahDiproses,
-        tanggal: tanggal || todayKey(),
-        timestamp: new Date().toISOString(),
-        hasil
-    });
-    saveJSON(SK_MASAK, stokMasakList);
-    renderSemuaStock();
-}
-
-function submitMasak(bahanBakuId) {
-    const jumlah = Number(document.getElementById('inputJumlahMasak').value);
-    const tanggal = document.getElementById('inputTanggalMasak').value || todayKey();
-    if (!jumlah || jumlah <= 0) { alert('Jumlah harus diisi dan lebih dari 0.'); return; }
-    prosesMasak(bahanBakuId, jumlah, tanggal);
-    tutupModalForm();
+    if (entryId && entry) {
+        entry.jumlahDiproses = jumlah;
+        entry.tanggal = tanggal;
+        entry.hasil = hasil;
+        saveJSON(SK_MASAK, stokMasakList);
+        renderSemuaStock();
+        bukaModalRiwayatBahan(bahanBakuId);
+    } else {
+        stokMasakList.push({
+            id: 'sm_' + Date.now(),
+            bahanBakuId, jumlahDiproses: jumlah,
+            tanggal,
+            timestamp: new Date().toISOString(),
+            hasil
+        });
+        saveJSON(SK_MASAK, stokMasakList);
+        renderSemuaStock();
+        tutupModalForm();
+    }
 }
 
 // ==============================
@@ -668,56 +723,70 @@ function bukaModalStokMasuk(bahanBakuId, entryId) {
 }
 
 // --- Form: Stok Keluar ---
-function bukaModalStokKeluar(bahanBakuId) {
+function bukaModalStokKeluar(bahanBakuId, entryId) {
     const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
     if (!bahan) return;
-    const tersedia = hitungStokUtama(bahanBakuId);
+
+    let entry = null;
+    if (entryId) {
+        entry = stokKeluarList.find(x => x.id === entryId);
+        if (!entry) return;
+    }
+
+    const tersediaDasar = hitungStokUtama(bahanBakuId) + (entry ? entry.jumlah : 0);
 
     const html = `
         <p class="text-sm font-bold text-gray-800 mb-1">${bahan.nama} <span class="text-gray-400 font-normal">(${bahan.satuan})</span></p>
-        <p class="text-[11px] text-gray-400 mb-3">Stok gudang tersedia: <span class="font-bold text-gray-700">${tersedia} ${bahan.satuan}</span></p>
+        <p class="text-[11px] text-gray-400 mb-3">Stok gudang tersedia: <span class="font-bold text-gray-700">${tersediaDasar} ${bahan.satuan}</span></p>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Jumlah Keluar</label>
-            <input id="inputJumlahKeluar" type="number" min="0" max="${tersedia}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputJumlahKeluar" type="number" min="0" max="${tersediaDasar}" value="${entry ? entry.jumlah : ''}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Tanggal</label>
-            <input id="inputTanggalKeluar" type="date" value="${todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputTanggalKeluar" type="date" value="${entry ? entry.tanggal : todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Catatan (opsional)</label>
-            <input id="inputCatatanKeluar" type="text" placeholder="Contoh: dibawa ke gerobak/lapangan" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputCatatanKeluar" type="text" value="${entry && entry.catatan ? entry.catatan : ''}" placeholder="Contoh: dibawa ke gerobak/lapangan" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
-        <button onclick="submitStokKeluar('${bahanBakuId}')" class="w-full bg-orange-500 text-white font-bold py-3 rounded-xl mt-2">Simpan Stok Keluar</button>
+        <button onclick="submitStokKeluar('${bahanBakuId}', ${entryId ? `'${entryId}'` : 'null'})" class="w-full bg-orange-500 text-white font-bold py-3 rounded-xl mt-2">${entry ? 'Simpan Perubahan' : 'Simpan Stok Keluar'}</button>
     `;
-    bukaModalForm('Catat Stok Keluar', html);
+    bukaModalForm(entry ? 'Edit Stok Keluar' : 'Catat Stok Keluar', html);
 }
 
 // --- Form: Masak ---
-function bukaModalMasak(bahanBakuId) {
+function bukaModalMasak(bahanBakuId, entryId) {
     const bahan = bahanBakuList.find(b => b.id === bahanBakuId);
     if (!bahan) return;
-    const tersedia = hitungStokLapanganMentah(bahanBakuId);
+
+    let entry = null;
+    if (entryId) {
+        entry = stokMasakList.find(x => x.id === entryId);
+        if (!entry) return;
+    }
+
+    const tersediaDasar = hitungStokLapanganMentah(bahanBakuId) + (entry ? entry.jumlahDiproses : 0);
     const resepHtml = (bahan.resepKonversi || []).map(r => `<p class="text-[11px] text-gray-500">${r.jumlahPerUnit} ${r.jenisProduk} / ${bahan.satuan}</p>`).join('');
 
     const html = `
         <p class="text-sm font-bold text-gray-800 mb-1">${bahan.nama}</p>
-        <p class="text-[11px] text-gray-400 mb-2">Stok lapangan (belum diolah): <span class="font-bold text-gray-700">${tersedia} ${bahan.satuan}</span></p>
+        <p class="text-[11px] text-gray-400 mb-2">Stok lapangan (belum diolah): <span class="font-bold text-gray-700">${tersediaDasar} ${bahan.satuan}</span></p>
         <div class="bg-gray-50 rounded-lg p-2 mb-3">
             <p class="text-[11px] font-bold text-gray-500 mb-1">Konversi per ${bahan.satuan}:</p>
             ${resepHtml}
         </div>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Jumlah Diproses (${bahan.satuan})</label>
-            <input id="inputJumlahMasak" type="number" min="0" max="${tersedia}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputJumlahMasak" type="number" min="0" max="${tersediaDasar}" value="${entry ? entry.jumlahDiproses : ''}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
         <div class="mb-3">
             <label class="text-xs font-bold text-gray-500">Tanggal</label>
-            <input id="inputTanggalMasak" type="date" value="${todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
+            <input id="inputTanggalMasak" type="date" value="${entry ? entry.tanggal : todayKey()}" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mt-1">
         </div>
-        <button onclick="submitMasak('${bahanBakuId}')" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl mt-2">Proses & Simpan</button>
+        <button onclick="submitMasak('${bahanBakuId}', ${entryId ? `'${entryId}'` : 'null'})" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl mt-2">${entry ? 'Simpan Perubahan' : 'Proses & Simpan'}</button>
     `;
-    bukaModalForm('Proses Masak', html);
+    bukaModalForm(entry ? 'Edit Proses Masak' : 'Proses Masak', html);
 }
 
 // --- Form: Mapping Produk ---
@@ -820,17 +889,24 @@ function buildRiwayatBahanHtml(bahanBakuId) {
     const labelMap = { masuk: 'Masuk', keluar: 'Keluar', masak: 'Masak', retur: 'Retur' };
     const warnaMap = { masuk: 'text-green-600', keluar: 'text-orange-500', masak: 'text-red-600', retur: 'text-blue-600' };
     const tandaMap = { masuk: '+', keluar: '-', masak: '-', retur: '+' };
+    const editFnMap = { masuk: 'bukaModalStokMasuk', keluar: 'bukaModalStokKeluar', masak: 'bukaModalMasak', retur: 'bukaModalRetur' };
 
-    return semua.map(x => `
+    return semua.map(x => {
+        const hargaInfo = (x.tipe === 'masuk') ? (x.harga ? ` &middot; @Rp${x.harga.toLocaleString('id-ID')}` : ' &middot; <span class="text-orange-400">harga belum diisi</span>') : '';
+        return `
         <div class="flex justify-between items-center py-2 border-b border-gray-50 text-sm">
             <div>
                 <p class="font-semibold text-gray-700">${labelMap[x.tipe]} <span class="${warnaMap[x.tipe]} font-bold">${tandaMap[x.tipe]}${x.jumlah} ${bahan.satuan}</span></p>
-                <p class="text-[11px] text-gray-400">${x.tanggal}${x.catatan ? ' &middot; ' + x.catatan : ''}</p>
+                <p class="text-[11px] text-gray-400">${x.tanggal}${x.catatan ? ' &middot; ' + x.catatan : ''}${hargaInfo}</p>
                 <p class="text-[11px] text-gray-400">→ Gudang: <span class="font-semibold text-gray-600">${x.gudangSetelah}</span> &middot; Lapangan: <span class="font-semibold text-gray-600">${x.lapanganSetelah}</span></p>
             </div>
-            <button onclick="hapusTransaksiBahan('${bahanBakuId}', '${x.tipe}', '${x.id}')" class="text-red-500 font-bold text-xs px-2 shrink-0">Hapus</button>
+            <div class="flex flex-col items-end gap-1 shrink-0">
+                <button onclick="${editFnMap[x.tipe]}('${bahanBakuId}', '${x.id}')" class="text-blue-500 font-bold text-xs px-2">Edit</button>
+                <button onclick="hapusTransaksiBahan('${bahanBakuId}', '${x.tipe}', '${x.id}')" class="text-red-500 font-bold text-xs px-2">Hapus</button>
+            </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function hapusTransaksiBahan(bahanBakuId, tipe, id) {
