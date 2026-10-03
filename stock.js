@@ -4333,260 +4333,72 @@ function renderBahanBakuList() {
 // ============================================================
 
 function renderRekonsiliasi() {
+    const wrap = document.getElementById('tabelRekonsiliasi');
+    if (!wrap) return;
 
-    const tbody =
-        document.getElementById(
-            'tabelRekonsiliasi'
-        );
-
-
-    if (!tbody) {
+    const jenisList = getJenisProdukList();
+    if (jenisList.length === 0) {
+        wrap.innerHTML = `<p class="text-center text-gray-400 text-xs py-6 bg-gray-50 rounded-2xl">Belum ada jenis produk. Tambah bahan baku dengan konversi hasil olahan dulu.</p>`;
         return;
     }
 
-
-    const jenisList =
-        getJenisProdukList();
-
-
-    if (
-        jenisList.length === 0
-    ) {
-
-        tbody.innerHTML = `
-
-            <tr>
-
-                <td
-                    colspan="6"
-                    class="p-4 text-center text-gray-400 text-xs"
-                >
-                    Belum ada jenis produk.
-                    Tambah bahan baku dengan
-                    konversi hasil olahan dulu.
-                </td>
-
-            </tr>
-
-        `;
-
-        return;
-    }
-
-
-    let totalMasak = 0;
-
-    let totalTerjual = 0;
-
-    let totalHarusnya = 0;
-
-    let totalFisik = 0;
-
-    let totalSelisih = 0;
-
-    let jumlahFisikTerisi = 0;
-
-
-    const rows =
-        jenisList
-            .map(jenis => {
-
-                const masak =
-                    getStokMasakSaatIni(
-                        jenis
-                    );
-
-
-                const terjual =
-                    getPenjualanTercatat(
-                        jenis
-                    );
-
-
-                const harusnya =
-                    masak -
-                    terjual;
-
-
-                const fisikVal =
-                    getSisaFisik(
-                        jenis
-                    );
-
-
-                const fisik =
-                    fisikVal === ''
-                        ? null
-                        : angka(fisikVal);
-
-
-                const selisih =
-                    fisik === null
-                        ? null
-                        : fisik - harusnya;
-
-
-                totalMasak +=
-                    masak;
-
-
-                totalTerjual +=
-                    terjual;
-
-
-                totalHarusnya +=
-                    harusnya;
-
-
-                if (
-                    fisik !== null
-                ) {
-
-                    totalFisik +=
-                        fisik;
-
-                    totalSelisih +=
-                        selisih;
-
-                    jumlahFisikTerisi++;
-
-                }
-
-
-                const warna =
-                    selisih === null
-                        ? 'text-gray-300'
-                        : (
-                            selisih === 0
-                                ? 'text-green-600'
-                                : (
-                                    selisih < 0
-                                        ? 'text-red-500'
-                                        : 'text-blue-600'
-                                )
-                        );
-
-
-                const teks =
-                    selisih === null
-                        ? '-'
-                        : (
-                            selisih > 0
-                                ? `+${selisih}`
-                                : `${selisih}`
-                        );
-
-
-                return `
-
-                    <tr class="border-t border-gray-50">
-
-                        <td class="p-2 font-semibold text-gray-700">
-                            ${jenis}
-                        </td>
-
-
-                        <td class="p-2 text-right">
-                            ${masak}
-                        </td>
-
-
-                        <td class="p-2 text-right">
-                            ${terjual}
-                        </td>
-
-
-                        <td class="p-2 text-right">
-                            ${harusnya}
-                        </td>
-
-
-                        <td class="p-2 text-right">
-
-                            <input
-                                type="number"
-                                min="0"
-                                value="${fisikVal}"
-                                onchange="ubahSisaFisik('${jenis}', this.value)"
-                                class="w-14 border border-gray-200 rounded px-1 py-0.5 text-right text-xs"
-                            >
-
-                        </td>
-
-
-                        <td class="p-2 text-right font-bold ${warna}">
-                            ${teks}
-                        </td>
-
-                    </tr>
-
-                `;
-
-            })
-            .join('');
-
-
-    const totalTeks =
-        jumlahFisikTerisi === 0
-            ? '-'
-            : (
-                totalSelisih > 0
-                    ? `+${totalSelisih}`
-                    : `${totalSelisih}`
-            );
-
-
-    const totalWarna =
-        jumlahFisikTerisi === 0
-            ? 'text-gray-300'
-            : (
-                totalSelisih === 0
-                    ? 'text-green-600'
-                    : (
-                        totalSelisih < 0
-                            ? 'text-red-600'
-                            : 'text-blue-600'
-                    )
-            );
-
-
-    const rowTotal = `
-
-        <tr class="border-t-2 border-gray-200 bg-gray-50 font-bold">
-
-            <td class="p-2">
-                Total
-            </td>
-
-            <td class="p-2 text-right">
-                ${totalMasak}
-            </td>
-
-            <td class="p-2 text-right">
-                ${totalTerjual}
-            </td>
-
-            <td class="p-2 text-right">
-                ${totalHarusnya}
-            </td>
-
-            <td class="p-2 text-right">
-                ${jumlahFisikTerisi > 0 ? totalFisik : '-'}
-            </td>
-
-            <td class="p-2 text-right ${totalWarna}">
-                ${totalTeks}
-            </td>
-
-        </tr>
-
-    `;
-
-
-    tbody.innerHTML =
-        rows +
-        rowTotal;
-
+    let tMasak = 0, tTerjual = 0, tHarusnya = 0, tSelisih = 0, terisi = 0;
+
+    const stat = (label, val) => `
+        <div class="text-center">
+            <p class="text-[10px] text-gray-400 font-semibold">${label}</p>
+            <p class="text-base font-extrabold text-gray-800">${val}</p>
+        </div>`;
+
+    const cards = jenisList.map(jenis => {
+        const masak = getStokMasakSaatIni(jenis);
+        const terjual = getPenjualanTercatat(jenis);
+        const harusnya = masak - terjual;
+        const fisikVal = getSisaFisik(jenis);
+        const fisik = fisikVal === '' ? null : angka(fisikVal);
+        const selisih = fisik === null ? null : fisik - harusnya;
+
+        tMasak += masak; tTerjual += terjual; tHarusnya += harusnya;
+        if (selisih !== null) { tSelisih += selisih; terisi++; }
+
+        let badge;
+        if (selisih === null) badge = `<span class="text-[11px] font-bold px-2.5 py-1 rounded-full bg-gray-100 text-gray-400">Belum dicek</span>`;
+        else if (selisih === 0) badge = `<span class="text-[11px] font-bold px-2.5 py-1 rounded-full bg-green-100 text-green-700">✓ Pas</span>`;
+        else if (selisih < 0) badge = `<span class="text-[11px] font-bold px-2.5 py-1 rounded-full bg-red-100 text-red-600">Kurang ${Math.abs(selisih)}</span>`;
+        else badge = `<span class="text-[11px] font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-600">Lebih ${selisih}</span>`;
+
+        return `
+            <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-3">
+                <div class="flex justify-between items-center mb-2.5">
+                    <p class="font-extrabold text-gray-800">${jenis}</p>
+                    ${badge}
+                </div>
+                <div class="grid grid-cols-4 gap-1 items-center">
+                    ${stat('Masak', masak)}
+                    ${stat('Terjual', terjual)}
+                    ${stat('Harusnya', harusnya)}
+                    <div class="text-center">
+                        <p class="text-[10px] text-red-500 font-bold">Fisik</p>
+                        <input type="number" inputmode="numeric" min="0" value="${fisikVal}" placeholder="?"
+                            onchange="ubahSisaFisik('${jenis}', this.value)"
+                            class="w-full text-center border-2 border-red-100 focus:border-red-400 outline-none rounded-lg py-1 font-extrabold text-gray-800">
+                    </div>
+                </div>
+            </div>`;
+    }).join('');
+
+    const totalCls = terisi === 0 ? 'bg-gray-800' : (tSelisih === 0 ? 'bg-green-600' : (tSelisih < 0 ? 'bg-red-600' : 'bg-blue-600'));
+    const totalTeks = terisi === 0 ? 'Isi kolom Fisik untuk cek selisih'
+        : (tSelisih === 0 ? 'Semua pas ✓' : (tSelisih < 0 ? `Total kurang ${Math.abs(tSelisih)} pcs` : `Total lebih ${tSelisih} pcs`));
+
+    wrap.innerHTML = cards + `
+        <div class="${totalCls} text-white rounded-2xl p-3 flex justify-between items-center">
+            <div>
+                <p class="text-[10px] opacity-70 font-semibold uppercase">Ringkasan</p>
+                <p class="text-sm font-bold">${totalTeks}</p>
+            </div>
+            <p class="text-[11px] opacity-80 text-right">Masak ${tMasak} · Terjual ${tTerjual}<br>Harusnya ${tHarusnya}</p>
+        </div>`;
 }
 
 

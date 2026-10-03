@@ -131,19 +131,13 @@ function renderFormPiutangBaru() {
                     <p class="text-[11px] text-gray-400">Rp ${item.price.toLocaleString('id-ID')}</p>
                 </div>
                 <div class="flex items-center gap-2">
-                    <button onclick="ubahDraftPiutang('${item.id}', -1)" class="w-6 h-6 bg-gray-100 rounded-full text-gray-600 font-bold text-sm">-</button>
-                    <span class="w-4 text-center text-xs font-bold">${qty}</span>
-                    <button onclick="ubahDraftPiutang('${item.id}', 1)" class="w-6 h-6 bg-red-100 rounded-full text-red-600 font-bold text-sm">+</button>
+                    <button onclick="ubahDraftPiutang('${item.id}', -1)" class="w-7 h-7 bg-gray-100 rounded-full text-gray-600 font-bold text-sm touch-manipulation">-</button>
+                    <span id="dp-qty-${item.id}" class="w-4 text-center text-xs font-bold">${qty}</span>
+                    <button onclick="ubahDraftPiutang('${item.id}', 1)" class="w-7 h-7 bg-red-100 rounded-full text-red-600 font-bold text-sm touch-manipulation">+</button>
                 </div>
             </div>
         `;
     }).join('');
-
-    let totalDraft = 0;
-    Object.keys(draftPiutang).forEach(id => {
-        const item = menuData.find(m => m.id === id);
-        if (item) totalDraft += (draftPiutang[id] || 0) * item.price;
-    });
 
     const html = `
         <button onclick="gantiTabPiutang('belum')" class="text-xs font-bold text-gray-400 mb-3">← Batal</button>
@@ -154,7 +148,7 @@ function renderFormPiutangBaru() {
         <div class="max-h-[40vh] overflow-y-auto mb-3">${menuHtml}</div>
         <div class="flex justify-between items-center mb-3 font-bold text-sm border-t border-gray-100 pt-2">
             <span>Total</span>
-            <span>Rp ${totalDraft.toLocaleString('id-ID')}</span>
+            <span id="dpTotal">Rp 0</span>
         </div>
         <button onclick="submitPiutangBaru()" class="w-full bg-red-600 text-white font-bold py-3 rounded-xl">Simpan sebagai Piutang</button>
     `;
@@ -164,48 +158,18 @@ function renderFormPiutangBaru() {
 }
 
 function ubahDraftPiutang(id, change) {
-    const qty = (draftPiutang[id] || 0) + change;
-    draftPiutang[id] = qty < 0 ? 0 : qty;
-    renderFormPiutangBaru();
-}
+    const qty = Math.max(0, (draftPiutang[id] || 0) + change);
+    draftPiutang[id] = qty;
 
-function submitPiutangBaru() {
-    const namaInput = document.getElementById('inputNamaPiutang');
-    const customer = namaInput ? namaInput.value.trim() : '';
-    const itemIds = Object.keys(draftPiutang).filter(id => draftPiutang[id] > 0);
+    // Update langsung tanpa render ulang, jadi scroll & nama gak ke-reset
+    const qtyEl = document.getElementById(`dp-qty-${id}`);
+    if (qtyEl) qtyEl.innerText = qty;
 
-    if (itemIds.length === 0) {
-        alert('Pilih minimal 1 item dulu.');
-        return;
-    }
-
-    const items = [];
     let total = 0;
-
-    itemIds.forEach(id => {
-        const item = menuData.find(m => m.id === id);
-        if (!item) return;
-        const qty = draftPiutang[id];
-        items.push({ id, name: item.name, qty, price: item.price });
-        total += qty * item.price;
-
-        // Tetap masuk ke Total Omset & Riwayat kasir hari ini, karena ini tetap penjualan
-        updateQty(id, qty);
+    Object.keys(draftPiutang).forEach(k => {
+        const item = menuData.find(m => m.id === k);
+        if (item) total += (draftPiutang[k] || 0) * item.price;
     });
-
-    piutangList.push({
-        id: 'pt_' + Date.now(),
-        customer,
-        items,
-        total,
-        tanggal: todayDisplayPT(),
-        status: 'belum',
-        timestamp: new Date().toISOString(),
-        timestampLunas: null
-    });
-    saveJSON(PT_KEY, piutangList);
-
-    draftPiutang = {};
-    gantiTabPiutang('belum');
-    if (typeof renderRingkasanPembayaran === 'function') renderRingkasanPembayaran();
+    const totalEl = document.getElementById('dpTotal');
+    if (totalEl) totalEl.innerText = 'Rp ' + total.toLocaleString('id-ID');
 }

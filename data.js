@@ -12,7 +12,7 @@ const menuData = [
     { id: 'paket_pahaatas', category: 'Paket Ayam', name: 'Paha Atas + Nasi', price: 17000 },
 
     // AYAM UTUH
-    { id: 'utuh', category: 'Ayam Utuh', name: 'Ayam Utuh Kecil', price: 40000 },
+    { id: 'utuh', category: 'Ayam Utuh', name: 'Ayam Utuh Kecil', price: 45000 },
     { id: 'utuh_ar', category: 'Ayam Utuh', name: 'Ayam Utuh Besar', price: 55000 },
 
     // ADD-ON
