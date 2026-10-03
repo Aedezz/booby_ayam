@@ -23,6 +23,36 @@ function hitungTotalPiutangBelumLunas() {
     return piutangList.filter(p => p.status === 'belum').reduce((s, p) => s + p.total, 0);
 }
 
+// Hanya piutang belum lunas yang dicatat di shift yang SEDANG berjalan
+function hitungPiutangHariIni() {
+    return piutangList
+        .filter(p => p.status === 'belum' && p.shiftAktif === true)
+        .reduce((s, p) => s + p.total, 0);
+}
+
+// Jumlah piutang (bukan rupiah) yang belum lunas, ditampilkan sebagai badge merah
+function updateBadgePiutang() {
+    const badge = document.getElementById('badgePiutang');
+    if (!badge) return;
+
+    const jumlah = piutangList.filter(p => p.status === 'belum').length;
+
+    if (jumlah > 0) {
+        badge.innerText = jumlah > 99 ? '99+' : jumlah;
+        badge.classList.remove('hidden');
+        badge.classList.add('flex');
+    } else {
+        badge.classList.add('hidden');
+        badge.classList.remove('flex');
+    }
+}
+
+// Dipanggil saat Reset: piutang tetap tersimpan, tapi tidak lagi ikut hitungan tunai
+function lepasPiutangDariShift() {
+    piutangList.forEach(p => { p.shiftAktif = false; });
+    saveJSON(PT_KEY, piutangList);
+}
+
 // ==============================
 // MODAL UTAMA PIUTANG
 // ==============================
@@ -95,6 +125,7 @@ function tandaiPiutangLunas(id) {
     p.timestampLunas = new Date().toISOString();
     saveJSON(PT_KEY, piutangList);
     gantiTabPiutang('belum');
+    updateBadgePiutang();
     if (typeof renderRingkasanPembayaran === 'function') renderRingkasanPembayaran();
 }
 
@@ -173,3 +204,47 @@ function ubahDraftPiutang(id, change) {
     const totalEl = document.getElementById('dpTotal');
     if (totalEl) totalEl.innerText = 'Rp ' + total.toLocaleString('id-ID');
 }
+
+function submitPiutangBaru() {
+    const namaInput = document.getElementById('inputNamaPiutang');
+    const customer = namaInput ? namaInput.value.trim() : '';
+    const itemIds = Object.keys(draftPiutang).filter(id => draftPiutang[id] > 0);
+
+    if (itemIds.length === 0) {
+        alert('Pilih minimal 1 item dulu.');
+        return;
+    }
+
+    const items = [];
+    let total = 0;
+
+    itemIds.forEach(id => {
+        const item = menuData.find(m => m.id === id);
+        if (!item) return;
+        const qty = draftPiutang[id];
+        items.push({ id, name: item.name, qty, price: item.price });
+        total += qty * item.price;
+
+        // Tetap masuk ke Total Omset & Riwayat kasir hari ini, karena ini tetap penjualan
+        updateQty(id, qty);
+    });
+
+    piutangList.push({
+        id: 'pt_' + Date.now(),
+        customer,
+        items,
+        total,
+        tanggal: todayDisplayPT(),
+        status: 'belum',
+        shiftAktif: true,
+        timestamp: new Date().toISOString(),
+        timestampLunas: null
+    });
+    saveJSON(PT_KEY, piutangList);
+
+    draftPiutang = {};
+    gantiTabPiutang('belum');
+    if (typeof renderRingkasanPembayaran === 'function') renderRingkasanPembayaran();
+}
+
+updateBadgePiutang();

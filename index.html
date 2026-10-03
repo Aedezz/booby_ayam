@@ -43,42 +43,33 @@
 <div class="max-w-md mx-auto bg-white min-h-screen relative pb-32 shadow-xl">
 
     <!-- HEADER -->
-    <header class="sticky top-0 bg-white border-b border-gray-100 p-4 z-10 flex justify-between items-center shadow-sm">
-        <div class="flex items-center gap-3">
-            <button onclick="bukaMenuNav()" class="w-9 h-9 flex items-center justify-center bg-gray-50 rounded-full text-gray-600 active:bg-gray-100 transition-colors shrink-0">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-            </button>
-            <div>
-                <h1 class="text-xl font-extrabold text-red-600 tracking-tight">AYAM BOBBY</h1>
-                <p id="tanggalHariIni" class="text-xs text-gray-400 font-medium"></p>
-            </div>
-        </div>
-        <div class="flex items-center gap-2" id="headerActionsKasir">
-            <button onclick="bukaModalPiutang()" class="text-xs font-bold text-gray-500 hover:text-red-500 bg-gray-50 px-3 py-1.5 rounded-full transition-colors">
-                💳 Piutang
-            </button>
-            <button onclick="bukaModalPengeluaran()" class="text-xs font-bold text-gray-500 hover:text-red-500 bg-gray-50 px-3 py-1.5 rounded-full transition-colors">
-                💸 Keluar
-            </button>
-            <button onclick="bukaModalRiwayat()" class="text-xs font-bold text-gray-500 hover:text-red-500 bg-gray-50 px-3 py-1.5 rounded-full transition-colors">
-                Riwayat
-            </button>
-            <button onclick="resetData()" class="text-xs font-bold text-gray-400 hover:text-red-500 bg-gray-50 px-3 py-1.5 rounded-full transition-colors">
-                Reset
-            </button>
-        </div>
-        <div class="hidden items-center gap-2" id="headerActionsStock">
-            <button onclick="bukaModalArsipStock()" class="text-xs font-bold text-gray-400 hover:text-red-500 bg-gray-50 px-3 py-1.5 rounded-full transition-colors">
-                📜 Arsip
-            </button>
-            <button onclick="bukaModalMapping()" class="text-xs font-bold text-gray-400 hover:text-red-500 bg-gray-50 px-3 py-1.5 rounded-full transition-colors">
-                ⚙️ Mapping
-            </button>
+   <header class="sticky top-0 bg-white border-b border-gray-100 px-4 py-3 z-10 flex items-center gap-3 shadow-sm">
+        <button onclick="bukaMenuNav()" class="w-9 h-9 flex items-center justify-center bg-gray-50 rounded-full text-gray-600 active:bg-gray-100 shrink-0">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <div class="min-w-0">
+            <h1 class="text-lg font-extrabold text-red-600 tracking-tight leading-tight whitespace-nowrap">AYAM BOBBY</h1>
+            <p id="tanggalHariIni" class="text-[11px] text-gray-400 font-medium leading-tight truncate"></p>
         </div>
     </header>
 
     <!-- ============ HALAMAN KASIR ============ -->
     <div id="pageKasir">
+        <div class="flex gap-2 px-4 pt-3" id="headerActionsKasir">
+            <button onclick="bukaModalPiutang()" class="relative flex-1 flex flex-col items-center gap-0.5 py-2 rounded-xl bg-gray-50 text-gray-600">
+                <span id="badgePiutang" class="hidden absolute -top-1.5 -right-1 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[10px] font-extrabold rounded-full items-center justify-center shadow ring-2 ring-white"></span>
+                <span class="text-base leading-none">💳</span><span class="text-[11px] font-bold">Piutang</span>
+            </button>
+            <button onclick="bukaModalPengeluaran()" class="flex-1 flex flex-col items-center gap-0.5 py-2 rounded-xl bg-gray-50 text-gray-600">
+                <span class="text-base leading-none">💸</span><span class="text-[11px] font-bold">Keluar</span>
+            </button>
+            <button onclick="bukaModalRiwayat()" class="flex-1 flex flex-col items-center gap-0.5 py-2 rounded-xl bg-gray-50 text-gray-600">
+                <span class="text-base leading-none">🕘</span><span class="text-[11px] font-bold">Riwayat</span>
+            </button>
+            <button onclick="resetData()" class="flex-1 flex flex-col items-center gap-0.5 py-2 rounded-xl bg-red-50 text-red-500">
+                <span class="text-base leading-none">🔄</span><span class="text-[11px] font-bold">Reset</span>
+            </button>
+        </div>
         <!-- MENU LIST CONTAINER -->
         <main class="p-4" id="menuContainer">
             <!-- Render via JavaScript -->
@@ -106,6 +97,11 @@
 
     <!-- ============ HALAMAN STOCK ============ -->
     <div id="pageStock" class="hidden p-4 pb-32">
+
+        <div class="hidden gap-2 mb-4" id="headerActionsStock">
+            <button onclick="bukaModalArsipStock()" class="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-gray-50 text-gray-600 text-xs font-bold">📜 Arsip</button>
+            <button onclick="bukaModalMapping()" class="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-gray-50 text-gray-600 text-xs font-bold">⚙️ Mapping</button>
+        </div>
 
         <!-- SECTION: BAHAN BAKU -->
         <section class="mb-6">

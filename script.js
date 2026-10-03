@@ -111,7 +111,7 @@ function ubahTotalQris(value) {
 
 function renderRingkasanPembayaran() {
     const totalOmset = calculateTotal();
-    const totalPiutang = (typeof hitungTotalPiutangBelumLunas === 'function') ? hitungTotalPiutangBelumLunas() : 0;
+    const totalPiutang = (typeof hitungPiutangHariIni === 'function') ? hitungPiutangHariIni() : 0;
     const totalQris = state.qris || 0;
     const totalTunai = totalOmset - totalPiutang - totalQris;
 
@@ -198,6 +198,8 @@ function resetData() {
 
         localStorage.setItem('bobby_riwayat_archive', JSON.stringify(archive));
     }
+
+    if (typeof lepasPiutangDariShift === 'function') lepasPiutangDariShift();
 
     state = { items: {}, log: [], qris: 0 };
     saveState();
@@ -419,7 +421,7 @@ function copyToWA() {
     text += `*TOTAL OMSET: Rp ${total.toLocaleString('id-ID')}*`;
 
     const totalQris = state.qris || 0;
-    const totalPiutang = (typeof hitungTotalPiutangBelumLunas === 'function') ? hitungTotalPiutangBelumLunas() : 0;
+    const totalPiutang = (typeof hitungPiutangHariIni === 'function') ? hitungPiutangHariIni() : 0;
 
     if (totalQris > 0) {
         text += `\n*QRIS: Rp ${totalQris.toLocaleString('id-ID')}*`;
