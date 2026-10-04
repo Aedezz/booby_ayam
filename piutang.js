@@ -102,7 +102,10 @@ function buildPiutangTabHtml(tab) {
             <span class="text-xs font-bold text-red-700">Total Belum Lunas</span>
             <span class="font-bold text-red-700">Rp ${totalBelum.toLocaleString('id-ID')}</span>
         </div>
-        <button onclick="bukaFormPiutangBaru()" class="w-full bg-red-600 text-white font-bold py-2.5 rounded-xl mb-3 text-sm">+ Catat Piutang Baru</button>
+        <div class="flex gap-2 mb-3">
+            <button onclick="bukaFormPiutangBaru()" class="flex-1 bg-red-600 text-white font-bold py-2.5 rounded-xl text-sm">+ Catat Baru</button>
+            <button onclick="copyPiutangToWA()" class="flex-1 bg-gray-800 text-white font-bold py-2.5 rounded-xl text-sm">📋 Copy ke WA</button>
+        </div>
         <div class="flex gap-2 mb-3">
             ${tabBtn('belum', 'Belum Lunas')}
             ${tabBtn('lunas', 'Lunas')}
@@ -114,6 +117,63 @@ function buildPiutangTabHtml(tab) {
 function gantiTabPiutang(tab) {
     const body = document.getElementById('modalFormBody');
     if (body) body.innerHTML = buildPiutangTabHtml(tab);
+}
+
+function copyPiutangToWA() {
+    const list = piutangList.filter(p => p.status === 'belum');
+    if (list.length === 0) {
+        alert('Gak ada piutang yang belum lunas.');
+        return;
+    }
+
+    // Kelompokkan per nama pembeli (huruf besar/kecil dianggap sama)
+    const grup = {};
+    list.forEach(p => {
+        const nama = (p.customer || 'Tanpa nama').trim();
+        const key = nama.toLowerCase();
+        if (!grup[key]) grup[key] = { nama, items: [], total: 0 };
+        grup[key].items.push(p);
+        grup[key].total += p.total;
+    });
+
+    let text = `*PIUTANG BELUM LUNAS - AYAM BOBBY*\nPer: ${todayDisplayPT()}\n`;
+
+    Object.values(grup)
+        .sort((a, b) => b.total - a.total)
+        .forEach(g => {
+            text += `\n*${g.nama.toUpperCase()}*\n`;
+            g.items
+                .slice()
+                .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                .forEach(p => {
+                    const rincian = p.items.map(i => `${i.name} x${i.qty}`).join(', ');
+                    text += `- ${p.tanggal}: ${rincian} = Rp ${p.total.toLocaleString('id-ID')}\n`;
+                });
+            if (g.items.length > 1) {
+                text += `  Subtotal: Rp ${g.total.toLocaleString('id-ID')}\n`;
+            }
+        });
+
+    const totalSemua = list.reduce((s, p) => s + p.total, 0);
+    text += `\n------------------\n*TOTAL PIUTANG: Rp ${totalSemua.toLocaleString('id-ID')}* (${list.length} catatan)`;
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text)
+            .then(() => alert('Laporan piutang udah disalin, tinggal paste ke WA.'))
+            .catch(() => alert('Gagal menyalin otomatis. Coba lagi.'));
+    } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            alert('Laporan piutang udah disalin, tinggal paste ke WA.');
+        } catch (e) {
+            alert('Gagal menyalin laporan.');
+        }
+        document.body.removeChild(ta);
+    }
 }
 
 function tandaiPiutangLunas(id) {
